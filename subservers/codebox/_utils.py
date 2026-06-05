@@ -9,6 +9,7 @@ def open_box(
     lang: str,
     image: str | None,
     max_memory: str,
+    session_timeout: float,
 ) -> InteractiveSandboxSession:
 
     box = InteractiveSandboxSession(
@@ -16,18 +17,12 @@ def open_box(
         lang=lang,
         image=image,
         max_memory=max_memory,
+        session_timeout=session_timeout,
         verbose=False,
     )
 
     box.open()
     return box
-
-
-def runtime_path(
-    workdir: str,
-    path: str,
-) -> str:
-    return path if path.startswith("/") else f"{workdir}/{path}"
 
 
 def copy_into(

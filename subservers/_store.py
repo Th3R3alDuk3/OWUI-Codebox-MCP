@@ -1,4 +1,4 @@
-from asyncio import CancelledError, create_task, sleep, to_thread
+from asyncio import to_thread
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
@@ -13,10 +13,16 @@ class SessionStore:
     def __init__(self,
         max_size: int,
         ttl: float,
-        sweep_interval: float,
     ) -> None:
         self._sessions: TTLCache[str, Session] = TTLCache(max_size, ttl)
-        self._sweep_interval = sweep_interval
+
+    def is_full(self,
+        user_id: str,
+    ) -> bool:
+        return (
+            len(self._sessions) >= self._sessions.maxsize
+            and user_id not in self._sessions
+        )
 
     def set(self,
         user_id: str,
@@ -29,43 +35,21 @@ class SessionStore:
     ) -> Session | None:
         return self._sessions.get(user_id)
 
-    def touch(self,
-        user_id: str,
-        session: Session,
-    ) -> None:
-        if self._sessions.get(user_id) is session:
-            self._sessions[user_id] = session
-
     def pop(self,
         user_id: str,
     ) -> Session | None:
         return self._sessions.pop(user_id, None)
 
-    async def _sweep_task(self) -> None:
-        while True:
-            await sleep(self._sweep_interval)
-            for _user_id, session in self._sessions.expire() or []:
-                with suppress(Exception):
-                    await to_thread(session.box.close)
-
     @asynccontextmanager
-    async def lifespan(
-        self,
-        server: FastMCP,
+    async def lifespan(self,
+        _server: FastMCP,
     ) -> AsyncIterator[None]:
-
-        task = create_task(self._sweep_task())
 
         try:
             yield
         finally:
 
-            task.cancel()
-
-            with suppress(CancelledError):
-                await task
-
-            for _user_id, session in list(self._sessions.items()):
+            for session in list(self._sessions.values()):
                 with suppress(Exception):
                     await to_thread(session.box.close)
 

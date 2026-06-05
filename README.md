@@ -40,7 +40,6 @@ scripts/dev_token.py     mint a test JWT signed with JWT_SECRET
 |---|---|
 | `py_run_code` | run Python in the user's container; optional `libraries` to pip-install first |
 | `py_reset_session` | clear all state, start a fresh container |
-| `py_stop_session` | tear the container down |
 | `py_session_info` | inspect the session (age, idle, backend) |
 | `py_attach_file` | copy an attached OpenWebUI file into the sandbox |
 | `py_save_file` | upload a sandbox-produced file back to OpenWebUI |
@@ -98,3 +97,4 @@ docker run -d --restart unless-stopped \
   network policies, a locked-down `SANDBOX_IMAGE`, gVisor, etc.). llm-sandbox
   also supports security policies if you later want to filter code.
 - First `run_code` per user pays the container start (and image pull) cost.
+- Sessions expire automatically via sliding TTL (`SESSION_TTL_SECONDS`); the background sweep closes idle containers. No manual teardown needed.

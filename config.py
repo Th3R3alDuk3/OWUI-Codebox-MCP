@@ -11,24 +11,22 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    host: str = "0.0.0.0"
-    port: int = 8000
+    host: str
+    port: int
 
     jwt_secret: str
-    jwt_algorithm: str = "HS256"
-    owui_base_url: str = "http://localhost:3000"
+    jwt_algorithm: str
+    owui_base_url: str
 
-    session_ttl_seconds: int = 3600
-    session_sweep_interval_seconds: int = 300
-    max_sessions: int = 1000
+    session_ttl_seconds: int
+    max_sessions: int
 
-    container_backend: Literal[
-        "docker", "podman", "kubernetes", "micromamba"
-    ] = "docker"
-    sandbox_lang: str = "python"
-    sandbox_image: str | None = None
-    sandbox_max_memory: str = "1GB"
-    exec_timeout_seconds: float = 30.0
+    container_backend: Literal["docker", "podman", "kubernetes", "micromamba"]
+    sandbox_lang: str
+    sandbox_image: str | None
+    sandbox_max_memory: str
+    exec_timeout_seconds: float
+    max_file_size_bytes: int
 
 
 @lru_cache(maxsize=1)

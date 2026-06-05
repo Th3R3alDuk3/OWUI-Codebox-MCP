@@ -35,6 +35,13 @@ class SessionStore:
     ) -> Session | None:
         return self._sessions.get(user_id)
 
+    def touch(self,
+        user_id: str,
+        session: Session,
+    ) -> None:
+        if self._sessions.get(user_id) is session:
+            self._sessions[user_id] = session
+
     def pop(self,
         user_id: str,
     ) -> Session | None:

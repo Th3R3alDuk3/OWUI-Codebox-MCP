@@ -22,7 +22,6 @@ Tools (prefixed with `py_`):
   use. Pass `libraries` to pip-install packages (e.g. ['numpy', 'pandas'])
   before the code runs.
 - `py_reset_session` throws away all variables and files and starts fresh.
-- `py_stop_session` tears the sandbox down completely.
 - `py_session_info` inspects the current session (age, idle time, backend).
 - `py_attach_file` pulls a file the user attached in OpenWebUI into the
   sandbox at `/tmp/<file_name>` so code can read it from that path.

@@ -29,7 +29,7 @@ _settings = get_settings()
 
 _store = SessionStore(
     max_size=_settings.max_sessions,
-    ttl=_settings.session_ttl_seconds,
+    ttl=_settings.session_idle_timeout_seconds,
 )
 
 lifespan = _store.lifespan
@@ -54,7 +54,7 @@ async def _start_session(
         _settings.sandbox_lang,
         _settings.sandbox_image,
         _settings.sandbox_max_memory,
-        _settings.session_ttl_seconds,
+        _settings.session_max_lifetime_seconds,
     )
 
     session = Session(box=box)
@@ -152,6 +152,7 @@ async def run_code(
         )
 
         session.last_used = time()
+        _store.touch(user_id, session)
 
     return result
 
@@ -199,6 +200,7 @@ async def attach_file(
     async with session.lock:
         await to_thread(copy_into, session.box, file_path, data)
         session.last_used = time()
+        _store.touch(user_id, session)
 
     return (
         f"Wrote {len(data)} bytes to '{file_path}'. "
@@ -231,6 +233,7 @@ async def list_files(
             session.box.execute_command, f"ls -la {path}"
         )
         session.last_used = time()
+        _store.touch(user_id, session)
 
     if output.exit_code != 0:
         raise ToolError(f"Could not list '{path}': {output.stderr}")
@@ -275,6 +278,7 @@ async def save_file(
     async with session.lock:
         data = await to_thread(copy_out, session.box, file_path)
         session.last_used = time()
+        _store.touch(user_id, session)
 
     file_name = Path(file_name).name or Path(file_path).name
 

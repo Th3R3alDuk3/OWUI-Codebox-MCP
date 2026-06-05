@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str
     owui_base_url: str
 
-    session_ttl_seconds: int
+    session_idle_timeout_seconds: int
+    session_max_lifetime_seconds: int
     max_sessions: int
 
     container_backend: Literal["docker", "podman", "kubernetes", "micromamba"]

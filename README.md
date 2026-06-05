@@ -20,8 +20,8 @@ sweep). Same skeleton as
   container**. Variables, imports and files persist across `run_code` calls.
 - llm-sandbox is synchronous (container SDKs), so every call is offloaded with
   `asyncio.to_thread` to keep the MCP event loop free.
-- Sessions live in a `TTLCache` with a sliding TTL; a background task closes
-  idle containers. No disk writes on the MCP side.
+- Sessions live in a `TTLCache` with a sliding idle TTL; llm-sandbox closes
+  the container when the hard-cap lifetime is reached. No disk writes on the MCP side.
 
 ```
 main.py                  root FastMCP server: JWT auth + mounts the subserver
@@ -29,7 +29,7 @@ config.py                pydantic-settings (.env)
 services/owui.py         upload/download files to OpenWebUI (Bearer = JWT)
 models/                  pydantic models (owui, sandbox)
 subservers/
-  _store.py              Session + SessionStore (TTLCache per user + sweep)
+  _store.py              Session + SessionStore (TTLCache per user, sliding idle TTL)
   codebox/server.py      the py_* tools (call llm-sandbox directly)
 scripts/dev_token.py     mint a test JWT signed with JWT_SECRET
 ```
@@ -42,6 +42,7 @@ scripts/dev_token.py     mint a test JWT signed with JWT_SECRET
 | `py_reset_session` | clear all state, start a fresh container |
 | `py_session_info` | inspect the session (age, idle, backend) |
 | `py_attach_file` | copy an attached OpenWebUI file into the sandbox |
+| `py_list_files` | list files inside the sandbox at a given path |
 | `py_save_file` | upload a sandbox-produced file back to OpenWebUI |
 
 ## 🚀 Setup
@@ -97,4 +98,4 @@ docker run -d --restart unless-stopped \
   network policies, a locked-down `SANDBOX_IMAGE`, gVisor, etc.). llm-sandbox
   also supports security policies if you later want to filter code.
 - First `run_code` per user pays the container start (and image pull) cost.
-- Sessions expire automatically via sliding TTL (`SESSION_TTL_SECONDS`); the background sweep closes idle containers. No manual teardown needed.
+- Sessions expire automatically: idle sessions via `SESSION_IDLE_TIMEOUT_SECONDS` (sliding TTL), containers via `SESSION_MAX_LIFETIME_SECONDS` (hard cap). No manual teardown needed.

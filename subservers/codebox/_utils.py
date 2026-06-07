@@ -9,7 +9,7 @@ def open_box(
     lang: str,
     image: str | None,
     max_memory: str,
-    session_timeout: float,
+    max_lifetime: int,
 ) -> InteractiveSandboxSession:
 
     box = InteractiveSandboxSession(
@@ -17,7 +17,7 @@ def open_box(
         lang=lang,
         image=image,
         max_memory=max_memory,
-        session_timeout=session_timeout,
+        session_timeout=max_lifetime or None,  # 0 -> no hard cap
         verbose=False,
     )
 

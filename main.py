@@ -25,8 +25,9 @@ Tools (prefixed with `py_`):
 - `py_session_info` inspects the current session (age, idle time, backend).
 - `py_attach_file` pulls a file the user attached in OpenWebUI into the
   sandbox at `/tmp/<file_name>` so code can read it from that path.
-- `py_list_files` lists files and directories at a given sandbox path.
-  Use it to find the exact path of a produced file before calling `py_save_file`.
+- `py_run_command` runs a shell command in the sandbox and returns stdout,
+  stderr and the exit code. Use it for quick filesystem inspection (e.g.
+  `ls -la /tmp`) to find the exact path of a produced file before `py_save_file`.
 - `py_save_file` takes a file the sandbox produced and uploads it back to
   OpenWebUI so the user can download it.
 
@@ -34,7 +35,8 @@ Workflow: just call `py_run_code` with the code. Persist intermediate results
 in variables instead of recomputing them. Only `py_reset_session` clears
 state. To work with user files, `py_attach_file` first, then read from
 `/tmp/<file_name>` in your code; to hand a result back, write it to a file,
-optionally use `py_list_files` to confirm the path, then call `py_save_file`.
+optionally use `py_run_command` (e.g. `ls -la /tmp`) to confirm the path, then
+call `py_save_file`.
 """.strip()
 
 auth = JWTVerifier(

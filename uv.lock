@@ -727,10 +727,9 @@ wheels = [
 
 [[package]]
 name = "owui-codebox-mcp"
-version = "0.1.0"
+version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "cachetools" },
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "llm-sandbox", extra = ["docker"] },
@@ -739,7 +738,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "cachetools", specifier = ">=5.3.0" },
     { name = "fastmcp", specifier = ">=3.3.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "llm-sandbox", extras = ["docker"], specifier = ">=0.3.39" },

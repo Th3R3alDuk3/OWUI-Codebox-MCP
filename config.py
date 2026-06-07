@@ -19,12 +19,12 @@ class Settings(BaseSettings):
     owui_base_url: str
 
     session_idle_timeout_seconds: int
+    session_sweep_interval_seconds: int
     session_max_lifetime_seconds: int
     max_sessions: int
 
-    container_backend: Literal["docker", "podman", "kubernetes", "micromamba"]
-    sandbox_lang: str
-    sandbox_image: str | None
+    container_backend: Literal["docker", "podman", "kubernetes"]
+    sandbox_image: str = ""
     sandbox_max_memory: str
     exec_timeout_seconds: float
     max_file_size_bytes: int

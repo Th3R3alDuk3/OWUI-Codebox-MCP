@@ -1,7 +1,8 @@
-.git
-.venv
-__pycache__
-*.pyc
+.git/
+.gitignore
+.dockerignore
+.github/
+
 .env
-.ruff_cache
-.pytest_cache
+.venv/
+__pycache__/

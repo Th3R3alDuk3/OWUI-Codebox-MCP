@@ -3,6 +3,10 @@ from httpx import AsyncClient, HTTPStatusError, RequestError
 from models.owui import OWUIFile
 
 
+UPLOAD_FILE_URL = "{base_url}/api/v1/files/"
+DOWNLOAD_FILE_URL = "{base_url}/api/v1/files/{file_id}/content"
+
+
 async def upload_file(
     file_name: str,
     data: bytes,
@@ -15,7 +19,7 @@ async def upload_file(
 
         async with AsyncClient(verify=False) as client:
             response = await client.post(
-                url=f"{base_url}/api/v1/files/",
+                url=UPLOAD_FILE_URL.format(base_url=base_url),
                 headers={"Authorization": f"Bearer {token}"},
                 files={"file": (file_name, data, content_type)},
             )
@@ -46,7 +50,7 @@ async def download_file(
 
         async with AsyncClient(verify=False) as client:
             response = await client.get(
-                url=f"{base_url}/api/v1/files/{file_id}/content",
+                url=DOWNLOAD_FILE_URL.format(base_url=base_url, file_id=file_id),
                 headers={"Authorization": f"Bearer {token}"},
             )
 

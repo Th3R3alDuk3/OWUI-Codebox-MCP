@@ -6,18 +6,17 @@ from llm_sandbox import InteractiveSandboxSession, SandboxBackend
 
 def open_box(
     backend: str,
-    lang: str,
     image: str | None,
     max_memory: str,
-    session_timeout: float,
+    max_lifetime: int,
 ) -> InteractiveSandboxSession:
 
     box = InteractiveSandboxSession(
         backend=SandboxBackend(backend),
-        lang=lang,
+        lang="python",
         image=image,
         max_memory=max_memory,
-        session_timeout=session_timeout,
+        session_timeout=max_lifetime or None,  # 0 -> no hard cap
         verbose=False,
     )
 

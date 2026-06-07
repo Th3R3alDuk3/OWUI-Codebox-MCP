@@ -1,7 +1,5 @@
-__pycache__/
-*.py[cod]
-.venv/
 .env
-*.egg-info/
-.ruff_cache/
-.pytest_cache/
+.venv/
+__pycache__/
+
+GITHUB.md

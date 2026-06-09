@@ -2,41 +2,16 @@ from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 
 from config import get_settings
-from subservers.codebox.server import lifespan as codebox_lifespan
 from subservers.codebox.server import mcp as codebox_mcp
 
 
 settings = get_settings()
 
 ROOT_INSTRUCTIONS = """
-OWUI-Codebox-MCP gives each user a private, isolated Python sandbox running in
-its own container (powered by llm-sandbox).
-
-Every user has exactly one sandbox session, identified by their OpenWebUI user
-id. The session is a live IPython kernel: variables, imports, functions and
-files persist across calls, so you can build up a computation step by step.
-
-Tools (prefixed with `py_`):
-- `py_run_python` executes Python in the user's session and returns stdout,
-  stderr and the exit code. The session is created automatically on first
-  use. Pass `libraries` to pip-install packages (e.g. ['numpy', 'pandas'])
-  before the code runs.
-- `py_reset_session` throws away all variables and files and starts fresh.
-- `py_session_info` inspects the current session (age, idle time, backend).
-- `py_attach_file` pulls a file the user attached in OpenWebUI into the
-  sandbox at `/tmp/<file_name>` so code can read it from that path.
-- `py_run_command` runs a shell command in the sandbox and returns stdout,
-  stderr and the exit code. Use it for quick filesystem inspection (e.g.
-  `ls -la /tmp`) to find the exact path of a produced file before `py_save_file`.
-- `py_save_file` takes a file the sandbox produced and uploads it back to
-  OpenWebUI so the user can download it.
-
-Workflow: just call `py_run_python` with the code. Persist intermediate results
-in variables instead of recomputing them. Only `py_reset_session` clears
-state. To work with user files, `py_attach_file` first, then read from
-`/tmp/<file_name>` in your code; to hand a result back, write it to a file,
-optionally use `py_run_command` (e.g. `ls -la /tmp`) to confirm the path, then
-call `py_save_file`.
+OWUI-Codebox-MCP runs Python in a disposable, isolated container (powered by
+llm-sandbox): every call gets a fresh sandbox that is torn down right after, so
+nothing persists between calls. Its single tool, `run_python`, documents the
+full usage — including how to pass files in and out.
 """.strip()
 
 auth = JWTVerifier(
@@ -48,10 +23,9 @@ mcp = FastMCP(
     name="OWUI-Codebox-MCP",
     instructions=ROOT_INSTRUCTIONS,
     auth=auth,
-    lifespan=codebox_lifespan,
 )
 
-mcp.mount(codebox_mcp, namespace="py")
+mcp.mount(codebox_mcp)
 
 
 if __name__ == "__main__":

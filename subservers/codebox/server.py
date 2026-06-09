@@ -1,124 +1,58 @@
-from asyncio import Lock, to_thread
+from asyncio import Semaphore
 from pathlib import Path
-from time import monotonic, time
+from time import monotonic
 
 from fastmcp import FastMCP
-from fastmcp.dependencies import CurrentAccessToken, Depends, TokenClaim
+from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from llm_sandbox import ConsoleOutput
+from llm_sandbox.core.session_base import BaseSession
 from llm_sandbox.exceptions import SandboxTimeoutError
 from pydantic import Field
 
 from config import get_settings
-from models.sandbox import ExecResult, FileResponse, Session, SessionInfo
+from models.sandbox import ExecResult, OutputFile
 from services.owui import DOWNLOAD_FILE_URL, download_file, upload_file
-from subservers._store import SessionStore
 from subservers.codebox._utils import (
     copy_into,
     copy_out,
     open_box,
+    run_code,
 )
 
 
 _settings = get_settings()
-
-
-#
-
-
-_store = SessionStore(
-    max_size=_settings.max_sessions,
-    idle_timeout=_settings.session_idle_timeout_seconds,
-    sweep_interval=_settings.session_sweep_interval_seconds,
-)
-
-lifespan = _store.lifespan
-
-
-#
-
-
-_create_lock = Lock()
-
-
-async def _start_session(
-    user_id: str,
-) -> Session:
-
-    if _store.is_full(user_id):
-        raise ToolError("Server at capacity. Try again later.")
-
-    box = await to_thread(
-        open_box,
-        _settings.container_backend,
-        _settings.sandbox_image,
-        _settings.sandbox_max_memory,
-        _settings.session_max_lifetime_seconds,
-    )
-
-    session = Session(box=box)
-    _store.set(user_id, session)
-    return session
-
-
-async def ensure_session(
-    user_id: str = TokenClaim("id"),
-) -> Session:
-
-    session = _store.get(user_id)
-
-    if session is not None:
-        return session
-
-    async with _create_lock:
-
-        session = _store.get(user_id)
-
-        if session is None:
-            session = await _start_session(user_id)
-
-        return session
-
-
-async def require_session(
-    user_id: str = TokenClaim("id"),
-) -> Session:
-
-    session = _store.get(user_id)
-
-    if session is None:
-        raise ToolError("No active sandbox session. Run code first.")
-
-    return session
-
-
-#
-
+_slots = Semaphore(_settings.max_concurrent)
 
 mcp = FastMCP(name="codebox")
-
-
-# --- execution ---
 
 
 @mcp.tool(
     name="run_python",
     description=(
-        "Execute Python in the user's persistent sandbox container and return "
-        "stdout, stderr and the exit code. Variables, imports and files "
-        "persist across calls (IPython kernel), so build the computation up "
-        "step by step. The container is created automatically on first use.\n\n"
+        "Execute Python in a fresh, isolated sandbox container and return "
+        "stdout, stderr and the exit code. A new container is created for this "
+        "call and destroyed as soon as it returns, so NOTHING persists between "
+        "calls — send a complete, self-contained script every time.\n\n"
         "IMPORTANT – the sandbox has NO pre-installed third-party packages. "
         "You MUST list every package the code imports via `libraries` "
-        "(e.g. ['pandas', 'matplotlib']). Always populate `libraries` whenever "
-        "the code uses any import that is not part of the Python standard "
-        "library. Omitting required packages will cause an ImportError."
+        "(e.g. ['pandas', 'matplotlib']). Omitting required packages will "
+        "cause an ImportError.\n\n"
+        "Input file: set `input_file_id` to a file the user attached in "
+        "OpenWebUI; it is placed in the working directory under its original "
+        "name, so the code can open it by that filename.\n\n"
+        "Returning a file: to give the user a file your code produces (CSV, "
+        "image, plot, PDF, …), set `output_file_path` to that file's path in "
+        "this same call. The container is destroyed the moment the call "
+        "returns, so a file not named in `output_file_path` cannot be retrieved "
+        "afterwards — there is no separate save step. Only the named file is "
+        "uploaded back to OpenWebUI with a download URL."
     ),
 )
 async def run_python(
     code: str = Field(
-        description="Python source to execute in the user's sandbox.",
+        description="Self-contained Python source to execute in the sandbox.",
     ),
     libraries: list[str] = Field(
         default_factory=list,
@@ -128,109 +62,91 @@ async def run_python(
             "Do not leave this empty when the code uses third-party libraries."
         ),
     ),
-    session: Session = Depends(ensure_session),
+    input_file_id: str = Field(
+        default="",
+        description=(
+            "OpenWebUI file ID of a file the user attached, to copy into the "
+            "sandbox before running. The file lands in the working directory "
+            "under its original name. Leave empty if there is no input file; "
+            "never invent an ID."
+        ),
+    ),
+    output_file_path: str = Field(
+        default="",
+        description=(
+            "Path of a file the code writes that the user should receive "
+            "(e.g. 'result.csv' or '/sandbox/plot.png'). Set it in the same "
+            "call that writes the file, or it is lost when the sandbox is "
+            "destroyed. Leave empty when no file should be returned."
+        ),
+    ),
+    token: AccessToken = CurrentAccessToken(),
 ) -> ExecResult:
 
-    async with session.lock:
+    if _slots.locked():
+        raise ToolError("Server at capacity. Try again later.")
+
+    async with _slots, open_box(
+        backend=_settings.container_backend,
+        image=_settings.sandbox_image,
+        environment=_settings.pip_environment,
+        max_memory=_settings.sandbox_max_memory,
+        timeout=_settings.exec_timeout_seconds,
+    ) as box:
+
+        if input_file_id:
+            await _download_input(box, input_file_id, token.token)
 
         start = monotonic()
 
         try:
-            output: ConsoleOutput = await to_thread(
-                session.box.run,
+            output: ConsoleOutput = await run_code(
+                box,
                 code,
                 libraries,
                 _settings.exec_timeout_seconds,
             )
         except SandboxTimeoutError as error:
-            session.last_used = time()
             raise ToolError(
-                f"Execution timed out after {_settings.exec_timeout_seconds:.0f}s. "
-                "The session is still alive — simplify the code or split it "
-                "across calls."
+                f"Execution timed out after "
+                f"{_settings.exec_timeout_seconds:.0f}s. "
+                "Each call runs in a fresh container with no state carried "
+                "over, so splitting across calls does not help — make the code "
+                "faster or do less work so it finishes within the limit."
             ) from error
         except Exception as error:
             raise ToolError(
-                f"Sandbox execution failed: {type(error).__name__}: {error}"
+                f"Sandbox execution failed: {error}"
             ) from error
 
-        result = ExecResult(
-            exit_code=output.exit_code,
-            stdout=output.stdout,
-            stderr=output.stderr,
-            duration_ms=int((monotonic() - start) * 1000),
-        )
-
-        session.last_used = time()
-
-    return result
-
-
-@mcp.tool(
-    name="run_command",
-    description=(
-        "Run a shell command inside the user's sandbox container and return "
-        "stdout, stderr and the exit code. Runs as a separate process: it "
-        "shares the container's filesystem but NOT the IPython kernel's "
-        "variables, cwd or env — use `run_python` for stateful Python work. "
-        "Handy for quick inspection, e.g. 'ls -la /tmp', "
-        "'find /tmp -name \"*.csv\"' or 'cat out.txt', to locate a produced "
-        "file before calling `save_file`."
-    ),
-)
-async def run_command(
-    command: str = Field(
-        description=(
-            "Shell command to execute, e.g. 'ls -la /tmp' or "
-            "'find /tmp -name \"*.png\"'."
-        ),
-    ),
-    session: Session = Depends(ensure_session),
-) -> ExecResult:
-
-    async with session.lock:
-        start = monotonic()
-        output: ConsoleOutput = await to_thread(
-            session.box.execute_command, command
-        )
         duration_ms = int((monotonic() - start) * 1000)
-        session.last_used = time()
+
+        output_file = None
+
+        if output_file_path and output.exit_code == 0:
+            output_file = await _upload_output(
+                box, output_file_path, token.token
+            )
 
     return ExecResult(
         exit_code=output.exit_code,
         stdout=output.stdout,
         stderr=output.stderr,
         duration_ms=duration_ms,
+        output_file=output_file,
     )
 
 
-# --- files ---
-
-
-@mcp.tool(
-    name="attach_file",
-    description=(
-        "Download a file the user attached in OpenWebUI (by `file_id`) into "
-        "the sandbox at `/tmp/<file_name>`. After this call your code can "
-        "read it with open('/tmp/<file_name>', ...). "
-        "Use only when the user actually attached a file; never invent a `file_id`."
-    ),
-)
-async def attach_file(
-    file_id: str = Field(
-        description="OpenWebUI file ID of a file the user attached.",
-    ),
-    file_name: str = Field(
-        description="Relative name to write, e.g. 'data.csv'.",
-    ),
-    token: AccessToken = CurrentAccessToken(),
-    session: Session = Depends(ensure_session),
-) -> str:
+async def _download_input(
+    box: BaseSession,
+    file_id: str,
+    token: str,
+) -> None:
 
     try:
-        data = await download_file(
+        file_name, data = await download_file(
             file_id=file_id,
-            token=token.token,
+            token=token,
             base_url=_settings.owui_base_url,
         )
     except RuntimeError as error:
@@ -238,133 +154,56 @@ async def attach_file(
 
     if len(data) > _settings.max_file_size_bytes:
         raise ToolError(
-            f"File too large ({len(data):,} bytes). "
+            f"Input file too large ({len(data):,} bytes). "
             f"Limit is {_settings.max_file_size_bytes:,} bytes."
         )
 
-    file_name = Path(file_name).name
-    file_path = Path("/tmp").joinpath(file_name)
-
-    async with session.lock:
-        await to_thread(copy_into, session.box, file_path, data)
-        session.last_used = time()
-
-    return (
-        f"Wrote {len(data)} bytes to '{file_path}'. "
-        f"Read it from your code, e.g. open('{file_path}', 'rb')."
-    )
+    try:
+        await copy_into(box, file_name, data)
+    except Exception as error:
+        raise ToolError(
+            f"Could not copy '{file_name}' into the sandbox: "
+            f"{type(error).__name__}: {error}."
+        ) from error
 
 
-@mcp.tool(
-    name="save_file",
-    description=(
-        "Upload a file the sandbox produced to OpenWebUI so the user can "
-        "download it. Pass the exact path where the code wrote the file "
-        "(absolute or relative to the sandbox working directory), "
-        "e.g. '/tmp/result.csv' or 'plot.png'. Returns the download URL."
-    ),
-)
-async def save_file(
-    file_path: str = Field(
-        description=(
-            "Absolute or relative path of the file inside the sandbox, "
-            "e.g. '/tmp/result.csv' or 'plot.png'. "
-            "Use run_command (e.g. 'ls -la /tmp') first if unsure of the path."
-        ),
-    ),
-    file_name: str = Field(
-        default="",
-        description="Name to store it under in OpenWebUI. Defaults to the basename of `file_path`.",
-    ),
-    content_type: str = Field(
-        default="application/octet-stream",
-        description="MIME type of the file.",
-    ),
-    token: AccessToken = CurrentAccessToken(),
-    session: Session = Depends(require_session),
-) -> FileResponse:
+async def _upload_output(
+    box: BaseSession,
+    file_path: str,
+    token: str,
+) -> OutputFile:
 
-    async with session.lock:
-        data = await to_thread(copy_out, session.box, file_path)
-        session.last_used = time()
+    try:
+        data = await copy_out(box, file_path)
+    except Exception as error:
+        raise ToolError(
+            f"Could not read '{file_path}' from the sandbox: "
+            f"{type(error).__name__}: {error}. "
+            "Check that the code actually wrote the file to that path."
+        ) from error
 
-    file_name = Path(file_name).name or Path(file_path).name
+    if len(data) > _settings.max_file_size_bytes:
+        raise ToolError(
+            f"Output file too large ({len(data):,} bytes). "
+            f"Limit is {_settings.max_file_size_bytes:,} bytes."
+        )
+
+    file_name = Path(file_path).name
 
     try:
         uploaded = await upload_file(
             file_name=file_name,
             data=data,
-            content_type=content_type,
-            token=token.token,
+            content_type="application/octet-stream",
+            token=token,
             base_url=_settings.owui_base_url,
         )
     except RuntimeError as error:
         raise ToolError(str(error)) from error
 
-    return FileResponse(
+    return OutputFile(
         file_name=file_name,
         file_size=len(data),
-        owui_url=DOWNLOAD_FILE_URL.format(
+        download_url=DOWNLOAD_FILE_URL.format(
             base_url=_settings.owui_base_url, file_id=uploaded.id),
-    )
-
-
-# --- session management ---
-
-
-@mcp.tool(
-    name="session_info",
-    description=(
-        "Report the user's current sandbox session: whether one is active, "
-        "its id, the container backend, and how old / idle it is."
-    ),
-)
-async def session_info(
-    user_id: str = TokenClaim("id"),
-) -> SessionInfo:
-
-    session = _store.get(user_id)
-
-    if session is None:
-        return SessionInfo(
-            active=False,
-            session_id=None,
-            backend=_settings.container_backend,
-            age_seconds=0,
-            idle_seconds=0,
-        )
-
-    now = time()
-
-    return SessionInfo(
-        active=True,
-        session_id=session.session_id,
-        backend=_settings.container_backend,
-        age_seconds=int(now - session.created_at),
-        idle_seconds=int(now - session.last_used),
-    )
-
-
-@mcp.tool(
-    name="reset_session",
-    description=(
-        "Discard all variables and files and start a fresh sandbox container "
-        "for the user. Use this when the user wants a clean slate."
-    ),
-)
-async def reset_session(
-    user_id: str = TokenClaim("id"),
-) -> str:
-
-    old_session = _store.pop(user_id)
-
-    if old_session is not None:
-        async with old_session.lock:
-            await to_thread(old_session.box.close)
-
-    new_session = await ensure_session(user_id)
-
-    return (
-        f"Started a fresh sandbox ('{new_session.session_id}'). "
-        "All previous variables and files are gone."
     )

@@ -1,46 +1,89 @@
+from asyncio import to_thread
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from uuid import uuid4
 
-from llm_sandbox import InteractiveSandboxSession, SandboxBackend
+from llm_sandbox import ConsoleOutput, SandboxBackend, SandboxSession
+from llm_sandbox.core.session_base import BaseSession
 
 
-def open_box(
+@asynccontextmanager
+async def open_box(
     backend: str,
     image: str | None,
+    environment: dict[str, str],
     max_memory: str,
-    max_lifetime: int,
-) -> InteractiveSandboxSession:
+    timeout: float,
+) -> AsyncIterator[BaseSession]:
 
-    box = InteractiveSandboxSession(
-        backend=SandboxBackend(backend),
-        lang="python",
-        image=image,
-        max_memory=max_memory,
-        session_timeout=max_lifetime or None,  # 0 -> no hard cap
-        verbose=False,
-    )
+    def _open() -> BaseSession:
+        box = SandboxSession(
+            backend=SandboxBackend(backend),
+            lang="python",
+            image=image,
+            runtime_configs={
+                "name": f"sandbox-{uuid4().hex[:8]}",
+                "environment": environment,
+                "mem_limit": max_memory,
+            },
+            execution_timeout=timeout,
+            session_timeout=timeout,
+            verbose=False,
+        )
+        box.open()
+        return box
 
-    box.open()
-    return box
+    box = await to_thread(_open)
+
+    try:
+        yield box
+    finally:
+        with suppress(Exception):
+            await to_thread(box.close)
 
 
-def copy_into(
-    box: InteractiveSandboxSession,
-    file_path: str,
+async def run_code(
+    box: BaseSession,
+    code: str,
+    libraries: list[str],
+    timeout: float,
+) -> ConsoleOutput:
+    return await to_thread(box.run, code, libraries, timeout)
+
+
+async def copy_into(
+    box: BaseSession,
+    file_name: str,
     data: bytes,
 ) -> None:
 
-    with NamedTemporaryFile(delete=True) as tmp_file:
-        tmp_file.write(data)
-        tmp_file.flush()
-        box.copy_to_runtime(tmp_file.name, file_path)
+    file_name = Path(file_name).name
+    file_path = Path(box.config.workdir).joinpath(file_name)
+
+    def _copy() -> None:
+        with NamedTemporaryFile(delete=True) as tmp_file:
+            tmp_file.write(data)
+            tmp_file.flush()
+            box.copy_to_runtime(tmp_file.name, file_path.as_posix())
+
+    await to_thread(_copy)
 
 
-def copy_out(
-    box: InteractiveSandboxSession,
+async def copy_out(
+    box: BaseSession,
     file_path: str,
 ) -> bytes:
 
-    with NamedTemporaryFile(delete=True) as tmp_file:
-        box.copy_from_runtime(file_path, tmp_file.name)
-        return Path(tmp_file.name).read_bytes()
+    file_path = Path(file_path)
+
+    if not file_path.is_absolute():
+        file_path = Path(box.config.workdir).joinpath(file_path)
+
+    def _copy() -> bytes:
+        with NamedTemporaryFile(delete=True) as tmp_file:
+            box.copy_from_runtime(file_path.as_posix(), tmp_file.name)
+            return Path(tmp_file.name).read_bytes()
+
+    return await to_thread(_copy)

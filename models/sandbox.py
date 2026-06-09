@@ -1,37 +1,41 @@
-from asyncio import Lock
-from dataclasses import dataclass, field
-from time import time
-from typing import Any
-from uuid import uuid4
-
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
-@dataclass
-class Session:
-    box: Any
-    session_id: str = field(default_factory=lambda: uuid4().hex)
-    lock: Lock = field(default_factory=Lock)
-    created_at: float = field(default_factory=time)
-    last_used: float = field(default_factory=time)
+class OutputFile(BaseModel):
+    file_name: str = Field(
+        description="Name of the file returned from the sandbox.",
+    )
+    file_size: int = Field(
+        description="Size of the returned file in bytes.",
+    )
+    download_url: str = Field(
+        description=(
+            "Direct OpenWebUI download link for the file. Give this URL to the "
+            "user so they can download the file the code produced."
+        ),
+    )
 
 
 class ExecResult(BaseModel):
-    exit_code: int
-    stdout: str = ""
-    stderr: str = ""
-    duration_ms: int = 0
-
-
-class SessionInfo(BaseModel):
-    active: bool
-    session_id: str | None
-    backend: str
-    age_seconds: int
-    idle_seconds: int
-
-
-class FileResponse(BaseModel):
-    file_name: str
-    file_size: int
-    owui_url: str
+    exit_code: int = Field(
+        description="Process exit code; 0 means the script ran successfully.",
+    )
+    stdout: str = Field(
+        default="",
+        description="Everything the script printed to standard output.",
+    )
+    stderr: str = Field(
+        default="",
+        description="Standard error output, including the traceback on failure.",
+    )
+    duration_ms: int = Field(
+        default=0,
+        description="Wall-clock execution time of the script in milliseconds.",
+    )
+    output_file: OutputFile | None = Field(
+        default=None,
+        description=(
+            "The file returned to the user, present only when `output_file_path` "
+            "was set and the run succeeded; otherwise null."
+        ),
+    )

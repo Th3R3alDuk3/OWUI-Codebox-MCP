@@ -1,6 +1,6 @@
 # OWUI-Codebox-MCP
 
-> Per-session Python sandbox via MCP for OpenWebUI. Private, stateful, container-isolated.
+> Disposable Python sandbox via MCP for OpenWebUI. One tool, container-isolated, stateless.
 
 ---
 
@@ -19,6 +19,11 @@ In `.env`:
 - `OWUI_BASE_URL` → e.g. `http://localhost:3000` (reachable from the MCP server)
 - `CONTAINER_BACKEND` → `docker` (default) / `podman` / `kubernetes`
 - `SANDBOX_IMAGE` → optional custom image; blank uses llm-sandbox's default
+- `PIP_INDEX_URL` / `PIP_EXTRA_INDEX_URL` / `PIP_TRUSTED_HOST` → optional private
+  package index. Blank uses PyPI; point `PIP_INDEX_URL` at a Nexus Sonatype repo
+  (e.g. `https://nexus.example.com/repository/pypi/simple`) to install from there
+  instead. Credentials may be embedded in the URL (`https://user:pass@host/...`).
+  These are injected into the sandbox as pip-honoured env vars.
 
 ## ▶️ Run
 
@@ -27,8 +32,8 @@ uv run python main.py
 ```
 
 Runs as `streamable-http` on `HOST:PORT` from `.env`. Point OpenWebUI's MCP/tools
-config at `http://<host>:<port>/mcp`. Mint a test token with
-`JWT_SECRET=yoursecret uv run python scripts/dev_token.py`.
+config at `http://<host>:<port>/mcp`. The server authenticates requests with a
+JWT signed by `JWT_SECRET` carrying the OpenWebUI user's `id` claim.
 
 ## 🐳 Docker (optional)
 
@@ -47,23 +52,24 @@ owui-codebox-mcp
 
 Config is read from your `.env` via `--env-file`; `HOST=0.0.0.0` makes the server
 reachable from outside the container. Prebuilt images are published to **ghcr.io**
-on every push — see [GITHUB.md](GITHUB.md).
+on pushes to `main` and on version tags.
 
-## 🛠️ Tools (namespace `py`)
+## 🛠️ Tool
 
-Each user (JWT claim `id`) gets one private `llm_sandbox.InteractiveSandboxSession`
-— an IPython kernel in a container. Variables, imports and files persist across
-`run_python` calls; sessions live in a dict with a sliding idle sweep, no persistent 
-disk writes on the MCP side.
+A single tool, `run_python`. Every call spins up a fresh
+`llm_sandbox.SandboxSession` container, runs the code, and tears the container
+down again right after — nothing persists between calls, so each call must send
+a complete, self-contained script.
 
-| Tool | |
+| Parameter | |
 |---|---|
-| `py_run_python` | run Python in the user's container; `libraries` to pip-install first |
-| `py_reset_session` | clear all state, start a fresh container |
-| `py_session_info` | inspect the session (age, idle, backend) |
-| `py_attach_file` | copy an attached OpenWebUI file into the sandbox |
-| `py_run_command` | run a shell command in the sandbox (stdout/stderr/exit code) |
-| `py_save_file` | upload a sandbox-produced file back to OpenWebUI |
+| `code` | self-contained Python to execute |
+| `libraries` | packages to pip-install first (required for any non-stdlib import) |
+| `input_file_id` | OpenWebUI file ID to copy into the workdir under its original name before running |
+| `output_file_path` | path of a file the code writes; returned to the user after a successful run |
+
+The result carries `exit_code`, `stdout`, `stderr`, `duration_ms`, and — when
+`output_file_path` is set — an `output_file` with the OpenWebUI download URL.
 
 ## 🔒 Notes
 
@@ -71,16 +77,12 @@ disk writes on the MCP side.
   design. Harden the runtime as needed (`SANDBOX_MAX_MEMORY`, network policies, a
   locked-down `SANDBOX_IMAGE`, gVisor, …). llm-sandbox also supports security
   policies if you later want to filter code.
-- First `run_python` per user pays the container start (and image pull) cost.
-- Sessions expire automatically. Three independent timeouts apply:
-  - `SESSION_IDLE_TIMEOUT_SECONDS` — a background sweep (every
-    `SESSION_SWEEP_INTERVAL_SECONDS`) reaps containers idle longer than this; the
-    idle clock resets on every call.
-  - `SESSION_MAX_LIFETIME_SECONDS` — a hard wall-clock cap (default `1800`; `0`
-    disables) that closes a container that many seconds after it started,
-    regardless of activity. The next call then reports a timeout.
-  - `EXEC_TIMEOUT_SECONDS` — caps a single call; it aborts that one call but
-    keeps the session alive.
-
-  Logs (`fastmcp.codebox`) record every start, reap and capacity rejection. No
-  manual teardown needed.
+- Every call pays the container start (and, the first time, image pull) cost.
+- `EXEC_TIMEOUT_SECONDS` caps a single call; on timeout the container is torn
+  down and the call returns an error.
+- `MAX_CONCURRENT` caps how many sandbox containers may run concurrently; calls
+  past the cap are rejected with a capacity error. No manual teardown needed —
+  containers never outlive the call that created them.
+- Each container is named `sandbox-<random>` (a short random suffix), so
+  concurrent calls never collide on a name. The name is freed when the container
+  is removed at the end of the call.

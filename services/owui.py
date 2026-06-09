@@ -1,9 +1,12 @@
+from pathlib import Path
+
 from httpx import AsyncClient, HTTPStatusError, RequestError
 
 from models.owui import OWUIFile
 
 
 UPLOAD_FILE_URL = "{base_url}/api/v1/files/"
+FILE_META_URL = "{base_url}/api/v1/files/{file_id}"
 DOWNLOAD_FILE_URL = "{base_url}/api/v1/files/{file_id}/content"
 
 
@@ -44,19 +47,28 @@ async def download_file(
     file_id: str,
     token: str,
     base_url: str,
-) -> bytes:
+) -> tuple[str, bytes]:
 
     try:
 
         async with AsyncClient(verify=False) as client:
-            response = await client.get(
+
+            meta_response = await client.get(
+                url=FILE_META_URL.format(base_url=base_url, file_id=file_id),
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            meta_response.raise_for_status()
+
+            content_response = await client.get(
                 url=DOWNLOAD_FILE_URL.format(base_url=base_url, file_id=file_id),
                 headers={"Authorization": f"Bearer {token}"},
             )
+            content_response.raise_for_status()
 
-        response.raise_for_status()
+        meta = OWUIFile.model_validate(meta_response.json())
+        file_name = Path(meta.filename).name or file_id
 
-        return response.content
+        return file_name, content_response.content
 
     except HTTPStatusError as error:
         raise RuntimeError(

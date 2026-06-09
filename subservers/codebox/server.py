@@ -6,7 +6,7 @@ from fastmcp import FastMCP
 from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
-from llm_sandbox import ConsoleOutput
+from llm_sandbox import ConsoleOutput, SecurityError
 from llm_sandbox.core.session_base import BaseSession
 from llm_sandbox.exceptions import SandboxTimeoutError
 from pydantic import Field
@@ -114,6 +114,8 @@ async def run_python(
                 "over, so splitting across calls does not help — make the code "
                 "faster or do less work so it finishes within the limit."
             ) from error
+        except SecurityError as error:
+            raise ToolError(str(error)) from error
         except Exception as error:
             raise ToolError(
                 f"Sandbox execution failed: {error}"
@@ -150,7 +152,9 @@ async def _download_input(
             base_url=_settings.owui_base_url,
         )
     except RuntimeError as error:
-        raise ToolError(str(error)) from error
+        raise ToolError(
+            str(error)
+        ) from error
 
     if len(data) > _settings.max_file_size_bytes:
         raise ToolError(
@@ -199,7 +203,9 @@ async def _upload_output(
             base_url=_settings.owui_base_url,
         )
     except RuntimeError as error:
-        raise ToolError(str(error)) from error
+        raise ToolError(
+            str(error)
+        ) from error
 
     return OutputFile(
         file_name=file_name,

@@ -73,10 +73,15 @@ The result carries `exit_code`, `stdout`, `stderr`, `duration_ms`, and — when
 
 ## 🔒 Notes
 
-- The container is the isolation boundary; code inside runs **unrestricted** by
-  design. Harden the runtime as needed (`SANDBOX_MAX_MEMORY`, network policies, a
-  locked-down `SANDBOX_IMAGE`, gVisor, …). llm-sandbox also supports security
-  policies if you later want to filter code.
+- The container is the isolation boundary. Each sandbox runs hardened by
+  default: all Linux capabilities dropped (only `DAC_OVERRIDE` kept, which
+  llm-sandbox needs), `no-new-privileges`, a `pids` limit (fork-bomb guard) and
+  no swap (so `SANDBOX_MAX_MEMORY` is a hard ceiling). Tighten further as needed
+  (network policies, a locked-down `SANDBOX_IMAGE`, gVisor, a CPU limit, …).
+- A static `is_safe()` pre-scan runs before each execution via llm-sandbox's
+  `SecurityPolicy`. It ships **empty** (a no-op) — add `SecurityPattern` entries
+  in `subservers/codebox/_utils.py` to block specific code. Treat it as an
+  accident catcher, not a boundary: a regex scan is trivially bypassable.
 - Every call pays the container start (and, the first time, image pull) cost.
 - `EXEC_TIMEOUT_SECONDS` caps a single call; on timeout the container is torn
   down and the call returns an error.

@@ -5,8 +5,15 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
-from llm_sandbox import ConsoleOutput, SandboxBackend, SandboxSession
+from llm_sandbox import ConsoleOutput, SandboxBackend, SandboxSession, SecurityError
 from llm_sandbox.core.session_base import BaseSession
+from llm_sandbox.security import SecurityIssueSeverity, SecurityPolicy
+
+
+SECURITY_POLICY = SecurityPolicy(
+    severity_threshold=SecurityIssueSeverity.HIGH,
+    patterns=[],
+)
 
 
 @asynccontextmanager
@@ -23,10 +30,17 @@ async def open_box(
             backend=SandboxBackend(backend),
             lang="python",
             image=image,
+            security_policy=SECURITY_POLICY,
             runtime_configs={
                 "name": f"sandbox-{uuid4().hex[:8]}",
                 "environment": environment,
                 "mem_limit": max_memory,
+                # hardening
+                "memswap_limit": max_memory,            # no swap: mem_limit is a hard ceiling
+                "pids_limit": 512,                      # fork-bomb guard
+                "cap_drop": ["ALL"],                    # drop every Linux capability …
+                "cap_add": ["DAC_OVERRIDE"],            # … except the one llm-sandbox needs to read the injected code file
+                "security_opt": ["no-new-privileges"],  # block setuid privilege escalation
             },
             execution_timeout=timeout,
             session_timeout=timeout,
@@ -50,6 +64,12 @@ async def run_code(
     libraries: list[str],
     timeout: float,
 ) -> ConsoleOutput:
+
+    safe, violations = box.is_safe(code)
+
+    if not safe:
+        raise SecurityError(f"Code rejected by the safety policy: {violations}.")
+
     return await to_thread(box.run, code, libraries, timeout)
 
 

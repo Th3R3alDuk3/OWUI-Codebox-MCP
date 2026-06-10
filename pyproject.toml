@@ -1,6 +1,6 @@
 [project]
 name = "owui-codebox-mcp"
-version = "0.3.1"
+version = "0.3.2"
 description = "Disposable Python sandbox MCP server for OpenWebUI."
 readme = "README.md"
 license = "MIT"
@@ -10,4 +10,5 @@ dependencies = [
     "httpx>=0.28.1",
     "llm-sandbox[docker]>=0.3.39",
     "pydantic-settings>=2.14.1",
+    "rich>=15.0.0",
 ]

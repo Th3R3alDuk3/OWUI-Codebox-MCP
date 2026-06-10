@@ -1,4 +1,6 @@
-from asyncio import Semaphore
+from asyncio import Semaphore, to_thread
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from time import monotonic
 
@@ -10,6 +12,7 @@ from llm_sandbox import ConsoleOutput, SecurityError
 from llm_sandbox.core.session_base import BaseSession
 from llm_sandbox.exceptions import SandboxTimeoutError
 from pydantic import Field
+from rich.text import Text
 
 from config import get_settings
 from models.sandbox import ExecResult, OutputFile
@@ -26,6 +29,31 @@ _settings = get_settings()
 _slots = Semaphore(_settings.max_concurrent)
 
 mcp = FastMCP(name="codebox")
+
+
+@asynccontextmanager
+async def _sandbox(
+    backend: str,
+    image: str | None,
+    environment: dict[str, str],
+    max_memory: str,
+    timeout: float,
+) -> AsyncIterator[BaseSession]:
+
+    box = await to_thread(
+        open_box,
+        backend,
+        image,
+        environment,
+        max_memory,
+        timeout,
+    )
+
+    try:
+        yield box
+    finally:
+        with suppress(Exception):
+            await to_thread(box.close)
 
 
 @mcp.tool(
@@ -86,7 +114,7 @@ async def run_python(
     if _slots.locked():
         raise ToolError("Server at capacity. Try again later.")
 
-    async with _slots, open_box(
+    async with _slots, _sandbox(
         backend=_settings.container_backend,
         image=_settings.sandbox_image,
         environment=_settings.pip_environment,
@@ -100,7 +128,8 @@ async def run_python(
         start = monotonic()
 
         try:
-            output: ConsoleOutput = await run_code(
+            output: ConsoleOutput = await to_thread(
+                run_code,
                 box,
                 code,
                 libraries,
@@ -132,8 +161,8 @@ async def run_python(
 
     return ExecResult(
         exit_code=output.exit_code,
-        stdout=output.stdout,
-        stderr=output.stderr,
+        stdout=Text.from_ansi(output.stdout).plain,
+        stderr=Text.from_ansi(output.stderr).plain,
         duration_ms=duration_ms,
         output_file=output_file,
     )
@@ -153,7 +182,7 @@ async def _download_input(
         )
     except RuntimeError as error:
         raise ToolError(
-            str(error)
+            f"Could not fetch input file '{file_id}' from OpenWebUI: {error}"
         ) from error
 
     if len(data) > _settings.max_file_size_bytes:
@@ -163,7 +192,7 @@ async def _download_input(
         )
 
     try:
-        await copy_into(box, file_name, data)
+        await to_thread(copy_into, box, file_name, data)
     except Exception as error:
         raise ToolError(
             f"Could not copy '{file_name}' into the sandbox: "
@@ -178,7 +207,7 @@ async def _upload_output(
 ) -> OutputFile:
 
     try:
-        data = await copy_out(box, file_path)
+        data = await to_thread(copy_out, box, file_path)
     except Exception as error:
         raise ToolError(
             f"Could not read '{file_path}' from the sandbox: "
@@ -204,7 +233,7 @@ async def _upload_output(
         )
     except RuntimeError as error:
         raise ToolError(
-            str(error)
+            f"Could not upload output file '{file_name}' to OpenWebUI: {error}"
         ) from error
 
     return OutputFile(

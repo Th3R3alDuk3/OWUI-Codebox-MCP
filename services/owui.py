@@ -66,7 +66,7 @@ async def download_file(
             content_response.raise_for_status()
 
         meta = OWUIFile.model_validate(meta_response.json())
-        file_name = Path(meta.filename).name or file_id
+        file_name = Path(meta.file_name).name or file_id
 
         return file_name, content_response.content
 

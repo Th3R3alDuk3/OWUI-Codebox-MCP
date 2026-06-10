@@ -70,6 +70,8 @@ a complete, self-contained script.
 
 The result carries `exit_code`, `stdout`, `stderr`, `duration_ms`, and — when
 `output_file_path` is set — an `output_file` with the OpenWebUI download URL.
+ANSI escape codes (colors, progress bars, …) are stripped from `stdout` and
+`stderr` so the model sees clean text.
 
 ## 🔒 Notes
 

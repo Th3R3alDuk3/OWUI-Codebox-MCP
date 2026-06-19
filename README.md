@@ -28,7 +28,7 @@ In `.env`:
 ## ▶️ Run
 
 ```bash
-docker pull vndee/sandbox-python-311-bullseye
+docker pull python:3.13-trixie
 uv run python main.py
 ```
 

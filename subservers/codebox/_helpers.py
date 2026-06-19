@@ -25,17 +25,17 @@ def open_box(
         backend=SandboxBackend(backend),
         lang="python",
         image=image,
+        workdir="/sandbox",
         security_policy=SECURITY_POLICY,
         runtime_configs={
             "name": f"sandbox-{uuid4().hex[:8]}",
             "environment": environment,
             "mem_limit": max_memory,
-            # hardening
-            "memswap_limit": max_memory,            # no swap: mem_limit is a hard ceiling
-            "pids_limit": 512,                      # fork-bomb guard
-            "cap_drop": ["ALL"],                    # drop every Linux capability …
-            "cap_add": ["DAC_OVERRIDE"],            # … except the one llm-sandbox needs to read the injected code file
-            "security_opt": ["no-new-privileges"],  # block setuid privilege escalation
+            "memswap_limit": max_memory,
+            "pids_limit": 512,
+            "cap_drop": ["ALL"],
+            "cap_add": ["DAC_OVERRIDE"],
+            "security_opt": ["no-new-privileges"],
         },
         execution_timeout=timeout,
         session_timeout=timeout,

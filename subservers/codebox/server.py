@@ -17,7 +17,7 @@ from rich.text import Text
 from config import get_settings
 from models.sandbox import ExecResult, OutputFile
 from services.owui import DOWNLOAD_FILE_URL, download_file, upload_file
-from subservers.codebox._utils import (
+from subservers.codebox._helpers import (
     copy_into,
     copy_out,
     open_box,
@@ -59,23 +59,15 @@ async def _sandbox(
 @mcp.tool(
     name="run_python",
     description=(
-        "Execute Python in a fresh, isolated sandbox container and return "
-        "stdout, stderr and the exit code. A new container is created for this "
-        "call and destroyed as soon as it returns, so NOTHING persists between "
-        "calls — send a complete, self-contained script every time.\n\n"
-        "IMPORTANT – the sandbox has NO pre-installed third-party packages. "
-        "You MUST list every package the code imports via `libraries` "
-        "(e.g. ['pandas', 'matplotlib']). Omitting required packages will "
-        "cause an ImportError.\n\n"
-        "Input file: set `input_file_id` to a file the user attached in "
-        "OpenWebUI; it is placed in the working directory under its original "
-        "name, so the code can open it by that filename.\n\n"
-        "Returning a file: to give the user a file your code produces (CSV, "
-        "image, plot, PDF, …), set `output_file_path` to that file's path in "
-        "this same call. The container is destroyed the moment the call "
-        "returns, so a file not named in `output_file_path` cannot be retrieved "
-        "afterwards — there is no separate save step. Only the named file is "
-        "uploaded back to OpenWebUI with a download URL."
+        "Execute self-contained Python in a fresh sandbox and return stdout, "
+        "stderr and the exit code. The container is destroyed after each call, "
+        "so nothing persists between calls.\n\n"
+        "No third-party packages are pre-installed: list every non-stdlib "
+        "import in `libraries` (e.g. ['pandas', 'matplotlib']).\n\n"
+        "Set `input_file_id` to an OpenWebUI file the user attached to use it "
+        "as input. To return a file the code produces, set `output_file_path` "
+        "to its path in the same call — otherwise it is lost when the container "
+        "is destroyed."
     ),
 )
 async def run_python(

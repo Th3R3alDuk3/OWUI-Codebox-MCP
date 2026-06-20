@@ -9,6 +9,6 @@ dependencies = [
     "fastmcp>=3.4.2",
     "httpx>=0.28.1",
     "llm-sandbox[docker]>=0.3.39",
-    "pydantic-settings>=2.14.1",
+    "pydantic-settings>=2.14.2",
     "rich>=15.0.0",
 ]

@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
-from llm_sandbox import ConsoleOutput, SecurityError
+from llm_sandbox import ConsoleOutput
 from llm_sandbox.core.session_base import BaseSession
 from llm_sandbox.exceptions import SandboxTimeoutError
 from pydantic import Field
@@ -17,43 +17,33 @@ from rich.text import Text
 from config import get_settings
 from models.sandbox import ExecResult, OutputFile
 from services.owui import DOWNLOAD_FILE_URL, download_file, upload_file
-from subservers.codebox._helpers import (
-    copy_into,
-    copy_out,
-    open_box,
-    run_code,
-)
+from subservers.codebox._sandbox import copy_into, copy_out, open_sandbox
 
 
 _settings = get_settings()
-_slots = Semaphore(_settings.max_concurrent)
+_slots = Semaphore(_settings.max_concurrent_sandboxes)
 
 mcp = FastMCP(name="codebox")
 
 
 @asynccontextmanager
-async def _sandbox(
-    backend: str,
-    image: str | None,
-    environment: dict[str, str],
-    max_memory: str,
-    timeout: float,
-) -> AsyncIterator[BaseSession]:
+async def _open_sandbox() -> AsyncIterator[BaseSession]:
 
-    box = await to_thread(
-        open_box,
-        backend,
-        image,
-        environment,
-        max_memory,
-        timeout,
+    sandbox = await to_thread(
+        open_sandbox,
+        _settings.container_backend,
+        _settings.sandbox_image or None,
+        _settings.pip_environment,
+        _settings.sandbox_max_memory,
+        _settings.sandbox_max_cpus,
+        _settings.exec_timeout_seconds,
     )
 
     try:
-        yield box
+        yield sandbox
     finally:
         with suppress(Exception):
-            await to_thread(box.close)
+            await to_thread(sandbox.close)
 
 
 @mcp.tool(
@@ -106,27 +96,15 @@ async def run_python(
     if _slots.locked():
         raise ToolError("Server at capacity. Try again later.")
 
-    async with _slots, _sandbox(
-        backend=_settings.container_backend,
-        image=_settings.sandbox_image,
-        environment=_settings.pip_environment,
-        max_memory=_settings.sandbox_max_memory,
-        timeout=_settings.exec_timeout_seconds,
-    ) as box:
+    async with _slots, _open_sandbox() as sandbox:
 
         if input_file_id:
-            await _download_input(box, input_file_id, token.token)
+            await _download_input(sandbox, input_file_id, token.token)
 
         start = monotonic()
 
         try:
-            output: ConsoleOutput = await to_thread(
-                run_code,
-                box,
-                code,
-                libraries,
-                _settings.exec_timeout_seconds,
-            )
+            output: ConsoleOutput = await to_thread(sandbox.run, code, libraries)
         except SandboxTimeoutError as error:
             raise ToolError(
                 f"Execution timed out after "
@@ -135,8 +113,6 @@ async def run_python(
                 "over, so splitting across calls does not help — make the code "
                 "faster or do less work so it finishes within the limit."
             ) from error
-        except SecurityError as error:
-            raise ToolError(str(error)) from error
         except Exception as error:
             raise ToolError(
                 f"Sandbox execution failed: {error}"
@@ -148,7 +124,7 @@ async def run_python(
 
         if output_file_path and output.exit_code == 0:
             output_file = await _upload_output(
-                box, output_file_path, token.token
+                sandbox, output_file_path, token.token
             )
 
     return ExecResult(
@@ -161,7 +137,7 @@ async def run_python(
 
 
 async def _download_input(
-    box: BaseSession,
+    sandbox: BaseSession,
     file_id: str,
     token: str,
 ) -> None:
@@ -184,7 +160,7 @@ async def _download_input(
         )
 
     try:
-        await to_thread(copy_into, box, file_name, data)
+        await to_thread(copy_into, sandbox, file_name, data)
     except Exception as error:
         raise ToolError(
             f"Could not copy '{file_name}' into the sandbox: "
@@ -193,13 +169,13 @@ async def _download_input(
 
 
 async def _upload_output(
-    box: BaseSession,
+    sandbox: BaseSession,
     file_path: str,
     token: str,
 ) -> OutputFile:
 
     try:
-        data = await to_thread(copy_out, box, file_path)
+        data = await to_thread(copy_out, sandbox, file_path)
     except Exception as error:
         raise ToolError(
             f"Could not read '{file_path}' from the sandbox: "

@@ -6,8 +6,8 @@
 
 ## 🚀 Setup
 
-Requires a container runtime — **Docker** by default (daemon must be running);
-`podman` and `kubernetes` also work via llm-sandbox.
+Requires a container runtime — **Docker** (daemon must be running) or
+**Podman**.
 
 ```bash
 uv sync
@@ -17,7 +17,9 @@ cp .env.example .env
 In `.env`:
 - `JWT_SECRET` → OpenWebUI's `WEBUI_SECRET_KEY`
 - `OWUI_BASE_URL` → e.g. `http://localhost:3000` (reachable from the MCP server)
-- `CONTAINER_BACKEND` → `docker` (default) / `podman` / `kubernetes`
+- `OWUI_VERIFY_TLS` → verify OpenWebUI's TLS certificate; set `false` only for
+  self-signed or plain-HTTP lab setups
+- `CONTAINER_BACKEND` → `docker` or `podman`
 - `SANDBOX_IMAGE` → optional custom image; blank uses llm-sandbox's default
 - `PIP_INDEX_URL` / `PIP_EXTRA_INDEX_URL` / `PIP_TRUSTED_HOST` → optional private
   package index. Blank uses PyPI; point `PIP_INDEX_URL` at a Nexus Sonatype repo
@@ -32,7 +34,7 @@ docker pull python:3.13-trixie
 uv run python main.py
 ```
 
-Runs as `streamable-http` on `HOST:PORT` from `.env`. Point OpenWebUI's MCP/tools
+Runs as Streamable HTTP on `HOST:PORT` from `.env`. Point OpenWebUI's MCP/tools
 config at `http://<host>:<port>/mcp`. The server authenticates requests with a
 JWT signed by `JWT_SECRET` carrying the OpenWebUI user's `id` claim.
 
@@ -78,17 +80,23 @@ ANSI escape codes (colors, progress bars, …) are stripped from `stdout` and
 
 - The container is the isolation boundary. Each sandbox runs hardened by
   default: all Linux capabilities dropped (only `DAC_OVERRIDE` kept, which
-  llm-sandbox needs), `no-new-privileges`, a `pids` limit (fork-bomb guard) and
-  no swap (so `SANDBOX_MAX_MEMORY` is a hard ceiling). Tighten further as needed
-  (network policies, a locked-down `SANDBOX_IMAGE`, gVisor, a CPU limit, …).
-- A static `is_safe()` pre-scan runs before each execution via llm-sandbox's
-  `SecurityPolicy`. It ships **empty** (a no-op) — add `SecurityPattern` entries
-  in `subservers/codebox/_utils.py` to block specific code. Treat it as an
-  accident catcher, not a boundary: a regex scan is trivially bypassable.
+  llm-sandbox needs), `no-new-privileges`, a `pids` limit (fork-bomb guard),
+  no swap (so `SANDBOX_MAX_MEMORY` is a hard ceiling) and a CPU cap
+  (`SANDBOX_MAX_CPUS`, e.g. `1` = one core). Tighten further as needed
+  (a locked-down `SANDBOX_IMAGE`, gVisor, …).
+- **Known gap — network**: the sandbox has full outbound network access (it
+  needs it for `pip install`), so executed code can reach the internet and
+  your LAN — including OpenWebUI itself. Restrict egress with a dedicated
+  Docker network or firewall rules if that matters in your environment.
+- **Known gap — disk**: there is no per-sandbox disk quota. Docker's
+  `storage_opt size` requires overlay2 on xfs with `pquota`; on other backing
+  filesystems (ext4, btrfs) a run can fill the disk under `/var/lib/docker`
+  until the timeout tears the container down. Monitor free space, or move
+  Docker's data-root to xfs to get a real quota.
 - Every call pays the container start (and, the first time, image pull) cost.
 - `EXEC_TIMEOUT_SECONDS` caps a single call; on timeout the container is torn
   down and the call returns an error.
-- `MAX_CONCURRENT` caps how many sandbox containers may run concurrently; calls
+- `MAX_CONCURRENT_SANDBOXES` caps how many sandbox containers may run concurrently; calls
   past the cap are rejected with a capacity error. No manual teardown needed —
   containers never outlive the call that created them.
 - Each container is named `sandbox-<random>` (a short random suffix), so

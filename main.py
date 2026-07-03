@@ -30,6 +30,7 @@ mcp.mount(codebox_mcp)
 
 if __name__ == "__main__":
     mcp.run(
-        host=settings.host, port=settings.port,
-        transport="streamable-http",
+        host=settings.host,
+        port=settings.port,
+        transport="http",
     )

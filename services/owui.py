@@ -2,12 +2,23 @@ from pathlib import Path
 
 from httpx import AsyncClient, HTTPStatusError, RequestError
 
+from config import get_settings
 from models.owui import OWUIFile
 
+_settings = get_settings()
 
-UPLOAD_FILE_URL = "{base_url}/api/v1/files/"
+
+REQUEST_TIMEOUT_SECONDS = 30.0
 FILE_META_URL = "{base_url}/api/v1/files/{file_id}"
+UPLOAD_FILE_URL = "{base_url}/api/v1/files/"
 DOWNLOAD_FILE_URL = "{base_url}/api/v1/files/{file_id}/content"
+
+
+def _client() -> AsyncClient:
+    return AsyncClient(
+        verify=_settings.owui_verify_tls,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
 
 
 async def upload_file(
@@ -20,7 +31,7 @@ async def upload_file(
 
     try:
 
-        async with AsyncClient(verify=False) as client:
+        async with _client() as client:
             response = await client.post(
                 url=UPLOAD_FILE_URL.format(base_url=base_url),
                 headers={"Authorization": f"Bearer {token}"},
@@ -51,7 +62,7 @@ async def download_file(
 
     try:
 
-        async with AsyncClient(verify=False) as client:
+        async with _client() as client:
 
             meta_response = await client.get(
                 url=FILE_META_URL.format(base_url=base_url, file_id=file_id),

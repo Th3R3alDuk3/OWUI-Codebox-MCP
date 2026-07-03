@@ -1,4 +1,4 @@
-from functools import lru_cache
+from functools import cache
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,12 +17,14 @@ class Settings(BaseSettings):
     jwt_secret: str
     jwt_algorithm: str
     owui_base_url: str
+    owui_verify_tls: bool
 
-    max_concurrent: int
+    max_concurrent_sandboxes: int
 
-    container_backend: Literal["docker", "podman", "kubernetes"]
+    container_backend: Literal["docker", "podman"]
     sandbox_image: str = ""
     sandbox_max_memory: str
+    sandbox_max_cpus: float
     exec_timeout_seconds: float
     max_file_size_bytes: int
 
@@ -39,6 +41,6 @@ class Settings(BaseSettings):
         }
 
 
-@lru_cache(maxsize=1)
+@cache
 def get_settings() -> Settings:
     return Settings()

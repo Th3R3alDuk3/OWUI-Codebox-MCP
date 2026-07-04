@@ -1,13 +1,14 @@
 from asyncio import Semaphore, to_thread
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from time import monotonic
 
-from fastmcp import FastMCP
-from fastmcp.dependencies import CurrentAccessToken
+from fastmcp.dependencies import CurrentAccessToken, TokenClaim
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
+from fastmcp.tools import tool
 from llm_sandbox import ConsoleOutput
 from llm_sandbox.core.session_base import BaseSession
 from llm_sandbox.exceptions import SandboxTimeoutError
@@ -16,37 +17,38 @@ from rich.text import Text
 
 from config import get_settings
 from models.sandbox import ExecResult, OutputFile
-from services.owui import DOWNLOAD_FILE_URL, download_file, upload_file
-from subservers.codebox._sandbox import copy_into, copy_out, open_sandbox
-
+from services.owui import download_file, upload_file
+from tools._sandbox import copy_into, copy_out, open_sandbox
 
 _settings = get_settings()
-_slots = Semaphore(_settings.max_concurrent_sandboxes)
+_server_slots = Semaphore(_settings.max_concurrent_sandboxes)
+_user_slots: Counter[str] = Counter()
 
-mcp = FastMCP(name="codebox")
 
+@contextmanager
+def _user_slot(
+    user_id: str,
+) -> Iterator[None]:
 
-@asynccontextmanager
-async def _open_sandbox() -> AsyncIterator[BaseSession]:
+    if _user_slots[user_id] >= _settings.max_concurrent_sandboxes_per_user:
+        raise ToolError(
+            f"You already have {_settings.max_concurrent_sandboxes_per_user} "
+            "sandboxes running. Wait for one to finish and try again."
+        )
 
-    sandbox = await to_thread(
-        open_sandbox,
-        _settings.container_backend,
-        _settings.sandbox_image or None,
-        _settings.pip_environment,
-        _settings.sandbox_max_memory,
-        _settings.sandbox_max_cpus,
-        _settings.exec_timeout_seconds,
-    )
+    _user_slots[user_id] += 1
 
     try:
-        yield sandbox
+        yield
     finally:
-        with suppress(Exception):
-            await to_thread(sandbox.close)
+
+        _user_slots[user_id] -= 1
+
+        if not _user_slots[user_id]:
+            del _user_slots[user_id]
 
 
-@mcp.tool(
+@tool(
     name="run_python",
     description=(
         "Execute self-contained Python in a fresh sandbox and return stdout, "
@@ -91,41 +93,44 @@ async def run_python(
         ),
     ),
     token: AccessToken = CurrentAccessToken(),
+    user_id: str = TokenClaim("id"),
 ) -> ExecResult:
 
-    if _slots.locked():
+    if _server_slots.locked():
         raise ToolError("Server at capacity. Try again later.")
 
-    async with _slots, _open_sandbox() as sandbox:
+    with _user_slot(user_id):
 
-        if input_file_id:
-            await _download_input(sandbox, input_file_id, token.token)
+        async with _server_slots, open_sandbox() as sandbox:
 
-        start = monotonic()
+            if input_file_id:
+                await _download_input(sandbox, input_file_id, token.token)
 
-        try:
-            output: ConsoleOutput = await to_thread(sandbox.run, code, libraries)
-        except SandboxTimeoutError as error:
-            raise ToolError(
-                f"Execution timed out after "
-                f"{_settings.exec_timeout_seconds:.0f}s. "
-                "Each call runs in a fresh container with no state carried "
-                "over, so splitting across calls does not help — make the code "
-                "faster or do less work so it finishes within the limit."
-            ) from error
-        except Exception as error:
-            raise ToolError(
-                f"Sandbox execution failed: {error}"
-            ) from error
+            start = monotonic()
 
-        duration_ms = int((monotonic() - start) * 1000)
+            try:
+                output: ConsoleOutput = await to_thread(sandbox.run, code, libraries)
+            except SandboxTimeoutError as error:
+                raise ToolError(
+                    f"Execution timed out after "
+                    f"{_settings.exec_timeout_seconds:.0f}s. "
+                    "Each call runs in a fresh container with no state carried "
+                    "over, so splitting across calls does not help — make the code "
+                    "faster or do less work so it finishes within the limit."
+                ) from error
+            except Exception as error:
+                raise ToolError(
+                    f"Sandbox execution failed: {error}"
+                ) from error
 
-        output_file = None
+            duration_ms = int((monotonic() - start) * 1000)
 
-        if output_file_path and output.exit_code == 0:
-            output_file = await _upload_output(
-                sandbox, output_file_path, token.token
-            )
+            output_file = None
+
+            if output_file_path and output.exit_code == 0:
+                output_file = await _upload_output(
+                    sandbox, output_file_path, token.token
+                )
 
     return ExecResult(
         exit_code=output.exit_code,
@@ -146,7 +151,6 @@ async def _download_input(
         file_name, data = await download_file(
             file_id=file_id,
             token=token,
-            base_url=_settings.owui_base_url,
         )
     except RuntimeError as error:
         raise ToolError(
@@ -197,7 +201,6 @@ async def _upload_output(
             data=data,
             content_type="application/octet-stream",
             token=token,
-            base_url=_settings.owui_base_url,
         )
     except RuntimeError as error:
         raise ToolError(
@@ -205,8 +208,7 @@ async def _upload_output(
         ) from error
 
     return OutputFile(
-        file_name=file_name,
+        file_name=uploaded.file_name or file_name,
         file_size=len(data),
-        download_url=DOWNLOAD_FILE_URL.format(
-            base_url=_settings.owui_base_url, file_id=uploaded.id),
+        download_url=uploaded.download_url,
     )

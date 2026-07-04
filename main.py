@@ -1,9 +1,10 @@
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 
 from config import get_settings
-from subservers.codebox.server import mcp as codebox_mcp
-
+from tools import TOOLS
 
 settings = get_settings()
 
@@ -25,7 +26,17 @@ mcp = FastMCP(
     auth=auth,
 )
 
-mcp.mount(codebox_mcp)
+mcp.add_middleware(RateLimitingMiddleware(
+    max_requests_per_second=settings.rate_limit_rps,
+    burst_capacity=settings.rate_limit_burst,
+    get_client_id=lambda context: (
+        str(token.claims.get("id") or token.client_id)
+        if (token := get_access_token()) else "anonymous"
+    ),
+))
+
+for tool in TOOLS:
+    mcp.add_tool(tool)
 
 
 if __name__ == "__main__":

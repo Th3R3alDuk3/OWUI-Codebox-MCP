@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     owui_verify_tls: bool
 
     max_concurrent_sandboxes: int
+    max_concurrent_sandboxes_per_user: int
+
+    rate_limit_rps: float
+    rate_limit_burst: int
 
     container_backend: Literal["docker", "podman"]
     sandbox_image: str = ""

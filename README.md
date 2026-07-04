@@ -97,8 +97,13 @@ ANSI escape codes (colors, progress bars, …) are stripped from `stdout` and
 - `EXEC_TIMEOUT_SECONDS` caps a single call; on timeout the container is torn
   down and the call returns an error.
 - `MAX_CONCURRENT_SANDBOXES` caps how many sandbox containers may run concurrently; calls
-  past the cap are rejected with a capacity error. No manual teardown needed —
-  containers never outlive the call that created them.
+  past the cap are rejected with a capacity error. `MAX_CONCURRENT_SANDBOXES_PER_USER`
+  additionally caps concurrent sandboxes per OpenWebUI user, so one user cannot
+  occupy all slots. No manual teardown needed — containers never outlive the
+  call that created them.
+- Requests are rate-limited per user (token bucket: `RATE_LIMIT_RPS` sustained,
+  `RATE_LIMIT_BURST` burst), keyed on the `id` claim of the OpenWebUI JWT. This
+  mainly dampens retry storms when the server is at capacity.
 - Each container is named `sandbox-<random>` (a short random suffix), so
   concurrent calls never collide on a name. The name is freed when the container
   is removed at the end of the call.

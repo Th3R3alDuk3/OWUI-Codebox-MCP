@@ -10,7 +10,7 @@ _settings = get_settings()
 
 REQUEST_TIMEOUT_SECONDS = 30.0
 FILE_META_URL = "{base_url}/api/v1/files/{file_id}"
-UPLOAD_FILE_URL = "{base_url}/api/v1/files/"
+UPLOAD_FILE_URL = "{base_url}/api/v1/files"
 DOWNLOAD_FILE_URL = "{base_url}/api/v1/files/{file_id}/content"
 
 

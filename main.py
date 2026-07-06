@@ -11,8 +11,9 @@ settings = get_settings()
 ROOT_INSTRUCTIONS = """
 OWUI-Codebox-MCP runs Python in a disposable, isolated container (powered by
 llm-sandbox): every call gets a fresh sandbox that is torn down right after, so
-nothing persists between calls. Its single tool, `run_python`, documents the
-full usage — including how to pass files in and out.
+nothing persists between calls. The `run_python` tool documents the full
+usage — including how to pass files in and out; `list_python_packages` shows which
+packages are preinstalled in the sandbox image.
 """.strip()
 
 auth = JWTVerifier(
@@ -30,8 +31,7 @@ mcp.add_middleware(RateLimitingMiddleware(
     max_requests_per_second=settings.rate_limit_rps,
     burst_capacity=settings.rate_limit_burst,
     get_client_id=lambda context: (
-        str(token.claims.get("id") or token.client_id)
-        if (token := get_access_token()) else "anonymous"
+        token.client_id if (token := get_access_token()) else "anonymous"
     ),
 ))
 
@@ -44,4 +44,5 @@ if __name__ == "__main__":
         host=settings.host,
         port=settings.port,
         transport="http",
+        host_origin_protection=False,
     )

@@ -6,26 +6,22 @@
 
 ## 🚀 Setup
 
-Requires a container runtime — **Docker** (daemon must be running) or
-**Podman**.
+Requires **Docker** (daemon running) or **Podman**.
 
 ```bash
 uv sync
 cp .env.example .env
 ```
 
-In `.env`:
+Set the important values in `.env`:
 - `JWT_SECRET` → OpenWebUI's `WEBUI_SECRET_KEY`
-- `OWUI_BASE_URL` → e.g. `http://localhost:3000` (reachable from the MCP server)
-- `OWUI_VERIFY_TLS` → verify OpenWebUI's TLS certificate; set `false` only for
-  self-signed or plain-HTTP lab setups
+- `OWUI_BASE_URL` → OpenWebUI URL reachable from this server, e.g. `http://localhost:3000`
+- `OWUI_VERIFY_TLS` → set `false` only for self-signed or plain-HTTP lab setups
 - `CONTAINER_BACKEND` → `docker` or `podman`
-- `SANDBOX_IMAGE` → optional custom image; blank uses llm-sandbox's default
-- `PIP_INDEX_URL` / `PIP_EXTRA_INDEX_URL` / `PIP_TRUSTED_HOST` → optional private
-  package index. Blank uses PyPI; point `PIP_INDEX_URL` at a Nexus Sonatype repo
-  (e.g. `https://nexus.example.com/repository/pypi/simple`) to install from there
-  instead. Credentials may be embedded in the URL (`https://user:pass@host/...`).
-  These are injected into the sandbox as pip-honoured env vars.
+- `SANDBOX_IMAGE_PYTHON` → optional custom Python sandbox image; blank uses
+  llm-sandbox's default
+- `PIP_INDEX_URL` / `PIP_TRUSTED_HOST` → optional private package index settings
+  injected into the sandbox
 
 ## ▶️ Run
 
@@ -34,9 +30,36 @@ docker pull python:3.13-trixie
 uv run python main.py
 ```
 
-Runs as Streamable HTTP on `HOST:PORT` from `.env`. Point OpenWebUI's MCP/tools
-config at `http://<host>:<port>/mcp`. The server authenticates requests with a
-JWT signed by `JWT_SECRET` carrying the OpenWebUI user's `id` claim.
+The server runs on `HOST:PORT` from `.env`. Point OpenWebUI's MCP/tools config
+at `http://<host>:<port>/mcp`. Requests must carry a JWT signed by `JWT_SECRET`
+with the OpenWebUI user's `id` claim.
+
+### Faster sandboxes: prebuilt image
+
+`sandbox.python.Dockerfile` extends `python:3.13-trixie` with common
+code-interpreter packages (numpy, pandas, matplotlib, scikit-learn, openpyxl,
+pymupdf, weasyprint, opencv, …) and fonts for HTML→PDF.
+
+```bash
+docker build -f sandbox.python.Dockerfile -t owui-codebox-sandbox .
+```
+
+Then set this in `.env`:
+
+```env
+SANDBOX_IMAGE_PYTHON=owui-codebox-sandbox
+```
+
+For a private package index, pass build args:
+
+```bash
+docker build -f sandbox.python.Dockerfile \
+  --build-arg PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
+  --build-arg PIP_TRUSTED_HOST=nexus.example.com \
+  -t owui-codebox-sandbox .
+```
+
+Runtime `PIP_*` values from `.env` still take precedence.
 
 ## 🐳 Docker (optional)
 
@@ -57,24 +80,19 @@ Config is read from your `.env` via `--env-file`; `HOST=0.0.0.0` makes the serve
 reachable from outside the container. Prebuilt images are published to **ghcr.io**
 on pushes to `main` and on version tags.
 
-## 🛠️ Tool
+## 🛠️ Tools
 
-A single tool, `run_python`. Every call spins up a fresh
-`llm_sandbox.SandboxSession` container, runs the code, and tears the container
-down again right after — nothing persists between calls, so each call must send
-a complete, self-contained script.
+Tools are grouped by language. The current Python tools are:
 
-| Parameter | |
-|---|---|
-| `code` | self-contained Python to execute |
-| `libraries` | packages to pip-install first (required for any non-stdlib import) |
-| `input_file_id` | OpenWebUI file ID to copy into the workdir under its original name before running |
-| `output_file_path` | path of a file the code writes; returned to the user after a successful run |
+- `run_python` executes a complete Python script in a fresh sandbox. It can
+  install requested packages, read one attached OpenWebUI file, and upload one
+  generated output file.
+- `list_python_packages` lists packages already present in the configured
+  sandbox image, so models can avoid reinstalling what is already available.
 
-The result carries `exit_code`, `stdout`, `stderr`, `duration_ms`, and — when
-`output_file_path` is set — an `output_file` with the OpenWebUI download URL.
-ANSI escape codes (colors, progress bars, …) are stripped from `stdout` and
-`stderr` so the model sees clean text.
+Each execution call is stateless: the container is created for that call and
+removed right after it finishes. Tool parameters and response fields are
+published through the MCP schema.
 
 ## 🔒 Notes
 
@@ -83,7 +101,7 @@ ANSI escape codes (colors, progress bars, …) are stripped from `stdout` and
   llm-sandbox needs), `no-new-privileges`, a `pids` limit (fork-bomb guard),
   no swap (so `SANDBOX_MAX_MEMORY` is a hard ceiling) and a CPU cap
   (`SANDBOX_MAX_CPUS`, e.g. `1` = one core). Tighten further as needed
-  (a locked-down `SANDBOX_IMAGE`, gVisor, …).
+  (a locked-down `SANDBOX_IMAGE_PYTHON`, gVisor, …).
 - **Known gap — network**: the sandbox has full outbound network access (it
   needs it for `pip install`), so executed code can reach the internet and
   your LAN — including OpenWebUI itself. Restrict egress with a dedicated
@@ -94,7 +112,7 @@ ANSI escape codes (colors, progress bars, …) are stripped from `stdout` and
   until the timeout tears the container down. Monitor free space, or move
   Docker's data-root to xfs to get a real quota.
 - Every call pays the container start (and, the first time, image pull) cost.
-- `EXEC_TIMEOUT_SECONDS` caps a single call; on timeout the container is torn
+- `SANDBOX_EXEC_TIMEOUT` (seconds) caps a single call; on timeout the container is torn
   down and the call returns an error.
 - `MAX_CONCURRENT_SANDBOXES` caps how many sandbox containers may run concurrently; calls
   past the cap are rejected with a capacity error. `MAX_CONCURRENT_SANDBOXES_PER_USER`

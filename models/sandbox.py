@@ -28,14 +28,28 @@ class ExecResult(BaseModel):
         default="",
         description="Standard error output, including the traceback on failure.",
     )
-    duration_ms: int = Field(
-        default=0,
-        description="Wall-clock execution time of the script in milliseconds.",
-    )
     output_file: OutputFile | None = Field(
         default=None,
         description=(
             "The file returned to the user, present only when `output_file_path` "
             "was set and the run succeeded; otherwise null."
         ),
+    )
+
+
+class InstalledPackage(BaseModel):
+    name: str = Field(
+        description="Package name as used with pip.",
+    )
+    version: str = Field(
+        description="Installed version.",
+    )
+
+
+class PackageListing(BaseModel):
+    image: str = Field(
+        description="Sandbox image the listing was taken from.",
+    )
+    packages: list[InstalledPackage] = Field(
+        description="Python packages preinstalled in the sandbox image.",
     )

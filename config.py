@@ -26,21 +26,23 @@ class Settings(BaseSettings):
     rate_limit_burst: int
 
     container_backend: Literal["docker", "podman"]
-    sandbox_image: str = ""
+    # One image per language; add more as language tools are added
+    # (e.g. sandbox_image_go).
+    sandbox_image_python: str
     sandbox_max_memory: str
     sandbox_max_cpus: float
-    exec_timeout_seconds: float
-    max_file_size_bytes: int
+    # seconds
+    sandbox_exec_timeout: float
+    # bytes
+    sandbox_max_file_size: int
 
     pip_index_url: str = ""
-    pip_extra_index_url: str = ""
     pip_trusted_host: str = ""
 
     @property
     def pip_environment(self) -> dict[str, str]:
         return {
             "PIP_INDEX_URL": self.pip_index_url,
-            "PIP_EXTRA_INDEX_URL": self.pip_extra_index_url,
             "PIP_TRUSTED_HOST": self.pip_trusted_host,
         }
 

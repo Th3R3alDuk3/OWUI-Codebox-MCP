@@ -214,8 +214,7 @@ async def list_python_packages() -> PackageListing:
 
             if output.exit_code != 0:
                 raise ToolError(
-                    f"Could not list packages: {output.stderr or output.stdout}"
-                )
+                    f"Could not list packages: {output.stderr or output.stdout}")
 
             try:
                 entries = loads(output.stdout.strip())

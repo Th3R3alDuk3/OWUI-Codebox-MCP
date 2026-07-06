@@ -23,8 +23,7 @@ from tools._sandbox import copy_into, copy_out, open_sandbox, user_slot
 
 _settings = get_settings()
 
-# The sandbox image is fixed for the process lifetime (settings are cached),
-# so one listing serves every call after the first.
+# The image is fixed for the process lifetime, so one listing serves all calls.
 _packages_lock = Lock()
 _packages_cache: PackageListing | None = None
 
@@ -83,7 +82,9 @@ async def run_python(
     async with user_slot(user_id):
 
         async with open_sandbox(
-            "python", _settings.sandbox_image_python
+            "python",
+            _settings.sandbox_image_python,
+            environment=_settings.sandbox_env_python,
         ) as sandbox:
 
             if input_file_id:
@@ -189,9 +190,6 @@ async def run_python(
 async def list_python_packages() -> PackageListing:
 
     global _packages_cache
-
-    if _packages_cache is not None:
-        return _packages_cache
 
     async with _packages_lock:
 

@@ -27,6 +27,7 @@ _user_slots: Counter[str] = Counter()
 async def open_sandbox(
     lang: Lang,
     image: str | None = None,
+    environment: dict[str, str] | None = None,
     skip_environment_setup: bool = False,
 ) -> AsyncIterator[BaseSession]:
 
@@ -36,7 +37,7 @@ async def open_sandbox(
     async with _server_slots:
 
         sandbox = await to_thread(
-            _open_sandbox, lang, image, skip_environment_setup)
+            _open_sandbox, lang, image, environment, skip_environment_setup)
 
         try:
             yield sandbox
@@ -48,6 +49,7 @@ async def open_sandbox(
 def _open_sandbox(
     lang: Lang,
     image: str | None = None,
+    environment: dict[str, str] | None = None,
     skip_environment_setup: bool = False,
 ) -> BaseSession:
 
@@ -59,7 +61,7 @@ def _open_sandbox(
         workdir="/sandbox",
         runtime_configs={
             "name": f"sandbox-{uuid4().hex[:8]}",
-            "environment": _settings.pip_environment,
+            "environment": environment or {},
             "mem_limit": _settings.sandbox_max_memory,
             "memswap_limit": _settings.sandbox_max_memory,
             "nano_cpus": int(_settings.sandbox_max_cpus * 1_000_000_000),

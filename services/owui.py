@@ -10,8 +10,8 @@ _settings = get_settings()
 
 REQUEST_TIMEOUT_SECONDS = 30.0
 FILE_META_URL = "{base_url}/api/v1/files/{file_id}"
-UPLOAD_FILE_URL = "{base_url}/api/v1/files"
-DOWNLOAD_FILE_URL = "{base_url}/api/v1/files/{file_id}/content"
+FILE_UPLOAD_URL = "{base_url}/api/v1/files"
+FILE_DOWNLOAD_URL = "{base_url}/api/v1/files/{file_id}/content"
 
 
 def _client() -> AsyncClient:
@@ -32,7 +32,7 @@ async def upload_file(
 
         async with _client() as client:
             response = await client.post(
-                url=UPLOAD_FILE_URL.format(
+                url=FILE_UPLOAD_URL.format(
                     base_url=_settings.owui_base_url),
                 headers={"Authorization": f"Bearer {token}"},
                 files={"file": (file_name, data, content_type)},
@@ -41,7 +41,7 @@ async def upload_file(
         response.raise_for_status()
 
         file = OWUIFile.model_validate(response.json())
-        file.download_url = DOWNLOAD_FILE_URL.format(
+        file.download_url = FILE_DOWNLOAD_URL.format(
             base_url=_settings.owui_base_url, file_id=file.id)
 
         return file
@@ -52,8 +52,7 @@ async def upload_file(
         ) from error
     except RequestError as error:
         raise RuntimeError(
-            f"Could not reach OpenWebUI."
-            f" Detail: {error}"
+            f"Could not reach OpenWebUI. Detail: {error}"
         ) from error
 
 
@@ -74,7 +73,7 @@ async def download_file(
             meta_response.raise_for_status()
 
             content_response = await client.get(
-                url=DOWNLOAD_FILE_URL.format(
+                url=FILE_DOWNLOAD_URL.format(
                     base_url=_settings.owui_base_url, file_id=file_id),
                 headers={"Authorization": f"Bearer {token}"},
             )
@@ -91,6 +90,5 @@ async def download_file(
         ) from error
     except RequestError as error:
         raise RuntimeError(
-            f"Could not reach OpenWebUI."
-            f" Detail: {error}"
+            f"Could not reach OpenWebUI. Detail: {error}"
         ) from error

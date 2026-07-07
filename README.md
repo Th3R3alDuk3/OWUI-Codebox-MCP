@@ -16,6 +16,8 @@ cp .env.example .env
 Set the important values in `.env`:
 
 - `JWT_SECRET` → OpenWebUI's `WEBUI_SECRET_KEY`
+- `JWT_ALGORITHM` → signing algorithm of the OpenWebUI JWTs; the default
+  `HS256` is correct unless you changed it on the OpenWebUI side
 - `OWUI_BASE_URL` → OpenWebUI URL reachable from this server, e.g. `http://localhost:3000`
 - `OWUI_VERIFY_TLS` → set `false` only for self-signed or plain-HTTP lab setups
 - `CONTAINER_BACKEND` → `docker` or `podman`
@@ -60,7 +62,6 @@ Every language follows the same pattern, so new ones (Go, Rust, …) plug in the
 | --- | --- | --- |
 | MCP tools | `tools/<lang>.py` | `tools/python.py` |
 | Sandbox image | `SANDBOX_IMAGE_<LANG>` in `.env` | `SANDBOX_IMAGE_PYTHON` |
-| Sandbox env vars (JSON) | `SANDBOX_ENV_<LANG>` in `.env` | `SANDBOX_ENV_PYTHON` |
 | Prebuilt image (optional) | `sandbox.<lang>.Dockerfile` | `sandbox.python.Dockerfile` |
 
 Execution semantics are identical for all languages: each call gets a fresh,
@@ -74,8 +75,8 @@ Currently supported: **Python**.
 **Tools**
 
 - `run_python` executes a complete Python script in a fresh sandbox. It can
-  install requested packages, read one attached OpenWebUI file, and upload one
-  generated output file.
+  install requested packages, read attached OpenWebUI files (each placed at a
+  chosen sandbox path), and upload generated output files.
 - `list_python_packages` lists packages already present in the configured
   sandbox image, so models can avoid reinstalling what is already available.
 
@@ -104,14 +105,8 @@ SANDBOX_IMAGE_PYTHON=owui-codebox-sandbox
 
 **Private package index**
 
-Set pip's env vars via `SANDBOX_ENV_PYTHON` in `.env` — the dict is injected
-into every `run_python` sandbox:
-
-```env
-SANDBOX_ENV_PYTHON={"PIP_INDEX_URL": "https://nexus.example.com/repository/pypi/simple", "PIP_TRUSTED_HOST": "nexus.example.com"}
-```
-
-For the prebuilt image, pass them as build args too:
+Pass pip's settings as build args when building the prebuilt image — they are
+baked into the image as env vars and apply to installs at runtime too:
 
 ```bash
 docker build -f sandbox.python.Dockerfile \
@@ -119,8 +114,6 @@ docker build -f sandbox.python.Dockerfile \
   --build-arg PIP_TRUSTED_HOST=nexus.example.com \
   -t owui-codebox-sandbox .
 ```
-
-Runtime values from `SANDBOX_ENV_PYTHON` still take precedence.
 
 ## 🔒 Sandboxing & limits
 
@@ -142,6 +135,8 @@ Runtime values from `SANDBOX_ENV_PYTHON` still take precedence.
 - Every call pays the container start (and, the first time, image pull) cost.
 - `SANDBOX_EXEC_TIMEOUT` (seconds) caps a single call; on timeout the container is torn
   down and the call returns an error.
+- `SANDBOX_MAX_FILE_SIZE` (bytes) caps each input and output file transferred
+  between OpenWebUI and the sandbox; larger files are rejected with an error.
 - `MAX_CONCURRENT_SANDBOXES` caps concurrent sandbox containers server-wide,
   `MAX_CONCURRENT_SANDBOXES_PER_USER` per OpenWebUI user; calls past a cap are
   rejected with a capacity error.

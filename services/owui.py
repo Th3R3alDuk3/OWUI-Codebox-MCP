@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from httpx import AsyncClient, HTTPStatusError, RequestError
 
 from config import get_settings
@@ -9,8 +7,7 @@ _settings = get_settings()
 
 
 REQUEST_TIMEOUT_SECONDS = 30.0
-FILE_META_URL = "{base_url}/api/v1/files/{file_id}"
-FILE_UPLOAD_URL = "{base_url}/api/v1/files"
+FILE_UPLOAD_URL = "{base_url}/api/v1/files/"
 FILE_DOWNLOAD_URL = "{base_url}/api/v1/files/{file_id}/content"
 
 
@@ -40,11 +37,11 @@ async def upload_file(
 
         response.raise_for_status()
 
-        file = OWUIFile.model_validate(response.json())
-        file.download_url = FILE_DOWNLOAD_URL.format(
-            base_url=_settings.owui_base_url, file_id=file.id)
+        owui_file = OWUIFile.model_validate(response.json())
+        owui_file.download_url = FILE_DOWNLOAD_URL.format(
+            base_url=_settings.owui_base_url, file_id=owui_file.id)
 
-        return file
+        return owui_file
 
     except HTTPStatusError as error:
         raise RuntimeError(
@@ -59,18 +56,11 @@ async def upload_file(
 async def download_file(
     file_id: str,
     token: str,
-) -> tuple[str, bytes]:
+) -> bytes:
 
     try:
 
         async with _client() as client:
-
-            meta_response = await client.get(
-                url=FILE_META_URL.format(
-                    base_url=_settings.owui_base_url, file_id=file_id),
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            meta_response.raise_for_status()
 
             content_response = await client.get(
                 url=FILE_DOWNLOAD_URL.format(
@@ -79,10 +69,7 @@ async def download_file(
             )
             content_response.raise_for_status()
 
-        meta = OWUIFile.model_validate(meta_response.json())
-        file_name = Path(meta.file_name).name or file_id
-
-        return file_name, content_response.content
+        return content_response.content
 
     except HTTPStatusError as error:
         raise RuntimeError(

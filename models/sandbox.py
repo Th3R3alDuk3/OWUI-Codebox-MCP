@@ -1,11 +1,23 @@
 from pydantic import BaseModel, Field
 
 
+class InputFile(BaseModel):
+    id: str = Field(
+        description="OpenWebUI ID of a file the user attached.",
+    )
+    path: str = Field(
+        description=(
+            "Absolute sandbox path to place the file at "
+            "(e.g. '/sandbox/data.csv')."
+        ),
+    )
+
+
 class OutputFile(BaseModel):
-    file_name: str = Field(
+    name: str = Field(
         description="Name of the file returned from the sandbox.",
     )
-    file_size: int = Field(
+    size: int = Field(
         description="Size of the returned file in bytes.",
     )
     download_url: str = Field(
@@ -28,11 +40,11 @@ class ExecResult(BaseModel):
         default="",
         description="Standard error output, including the traceback on failure.",
     )
-    output_file: OutputFile | None = Field(
-        default=None,
+    output_files: list[OutputFile] = Field(
+        default_factory=list,
         description=(
-            "The file returned to the user, present only when `output_file_path` "
-            "was set and the run succeeded; otherwise null."
+            "Files returned to the user, present only when `output_files` "
+            "was set on the call and the run succeeded; otherwise empty."
         ),
     )
 

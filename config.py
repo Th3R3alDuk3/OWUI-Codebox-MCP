@@ -24,10 +24,9 @@ class Settings(BaseSettings):
     rate_limit_burst: int
 
     container_backend: Literal["docker", "podman"]
-    # One image + env dict per language; add more as language tools are
-    # added (e.g. sandbox_image_go, sandbox_env_go).
+    # One image per language; add more as language tools are
+    # added (e.g. sandbox_image_go).
     sandbox_image_python: str
-    sandbox_env_python: dict[str, str]
     sandbox_max_memory: str
     sandbox_max_cpus: float
     # seconds

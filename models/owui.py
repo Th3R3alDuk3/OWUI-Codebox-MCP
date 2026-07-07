@@ -8,5 +8,5 @@ class OWUIFile(BaseModel):
     )
 
     id: str
-    file_name: str = Field(default="", alias="filename")
+    name: str = Field(default="", alias="filename")
     download_url: str = ""

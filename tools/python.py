@@ -1,5 +1,6 @@
 from asyncio import Lock, to_thread
 from json import loads
+from mimetypes import guess_type
 from pathlib import Path
 
 from fastmcp.dependencies import CurrentAccessToken, TokenClaim
@@ -14,12 +15,13 @@ from rich.text import Text
 from config import get_settings
 from models.sandbox import (
     ExecResult,
+    InputFile,
     InstalledPackage,
     OutputFile,
     PackageListing,
 )
 from services.owui import download_file, upload_file
-from tools._sandbox import copy_into, copy_out, open_sandbox, user_slot
+from tools._sandbox import WORKDIR, copy_into, copy_out, open_sandbox, user_slot
 
 _settings = get_settings()
 
@@ -34,15 +36,19 @@ _packages_cache: PackageListing | None = None
     description=(
         "Execute self-contained Python in a fresh sandbox and return stdout, "
         "stderr and the exit code. The container is destroyed after each call, "
-        "so nothing persists between calls.\n\n"
+        "so nothing persists between calls. The working directory is "
+        f"'{WORKDIR}' — read and write files there. Runs are killed after "
+        f"{_settings.sandbox_exec_timeout:.0f}s; files are limited to "
+        f"{_settings.sandbox_max_file_size:,} bytes each.\n\n"
         "List every non-stdlib import in `libraries` (e.g. ['pandas', "
         "'matplotlib']). Packages preinstalled in the sandbox image (see "
         "the `list_python_packages` tool) resolve instantly; anything else is "
         "downloaded before the run.\n\n"
-        "Set `input_file_id` to an OpenWebUI file the user attached to use it "
-        "as input. To return a file the code produces, set `output_file_path` "
-        "to its path in the same call — otherwise it is lost when the container "
-        "is destroyed."
+        "To use files the user attached, list them in `input_files`, each with "
+        "its OpenWebUI file ID and the sandbox path the code reads it from. "
+        "To return files the code produces, list their paths in "
+        "`output_files` in the same call — otherwise they are lost when the "
+        "container is destroyed."
     ),
 )
 async def run_python(
@@ -57,22 +63,23 @@ async def run_python(
             "Do not leave this empty when the code uses third-party libraries."
         ),
     ),
-    input_file_id: str = Field(
-        default="",
+    input_files: list[InputFile] = Field(
+        default_factory=list,
         description=(
-            "OpenWebUI file ID of a file the user attached, to copy into the "
-            "sandbox before running. The file lands in the working directory "
-            "under its original name. Leave empty if there is no input file; "
-            "never invent an ID."
+            "Files the user attached, to copy into the sandbox before "
+            "running. Each entry pairs an OpenWebUI file ID with the absolute "
+            "sandbox path the code expects it at (e.g. '/sandbox/data.csv'). "
+            "Leave empty if there are no input files; never invent an ID."
         ),
     ),
-    output_file_path: str = Field(
-        default="",
+    output_files: list[str] = Field(
+        default_factory=list,
         description=(
-            "Path of a file the code writes that the user should receive "
-            "(e.g. 'result.csv' or '/sandbox/plot.png'). Set it in the same "
-            "call that writes the file, or it is lost when the sandbox is "
-            "destroyed. Leave empty when no file should be returned."
+            "Paths of files the code writes that the user should receive "
+            "(e.g. ['/sandbox/plot.png', '/sandbox/result.csv']). Set them in "
+            "the same call that writes the files, or they are lost when the "
+            "sandbox is destroyed. Leave empty when no files should be "
+            "returned."
         ),
     ),
     token: AccessToken = CurrentAccessToken(),
@@ -84,19 +91,18 @@ async def run_python(
         async with open_sandbox(
             "python",
             _settings.sandbox_image_python,
-            environment=_settings.sandbox_env_python,
         ) as sandbox:
 
-            if input_file_id:
+            for input_file in input_files:
 
                 try:
-                    file_name, data = await download_file(
-                        file_id=input_file_id,
+                    data = await download_file(
+                        file_id=input_file.id,
                         token=token.token,
                     )
                 except RuntimeError as error:
                     raise ToolError(
-                        f"Could not fetch input file '{input_file_id}' "
+                        f"Could not fetch input file '{input_file.id}' "
                         f"from OpenWebUI: {error}"
                     ) from error
 
@@ -107,10 +113,10 @@ async def run_python(
                     )
 
                 try:
-                    await to_thread(copy_into, sandbox, file_name, data)
+                    await to_thread(copy_into, sandbox, input_file.path, data)
                 except Exception as error:
                     raise ToolError(
-                        f"Could not copy '{file_name}' into the sandbox: "
+                        f"Could not copy '{input_file.path}' into the sandbox: "
                         f"{type(error).__name__}: {error}."
                     ) from error
 
@@ -129,51 +135,56 @@ async def run_python(
                     f"Sandbox execution failed: {error}"
                 ) from error
 
-            output_file = None
+            uploaded_files: list[OutputFile] = []
 
-            if output_file_path and output.exit_code == 0:
+            if output.exit_code == 0:
 
-                try:
-                    data = await to_thread(copy_out, sandbox, output_file_path)
-                except Exception as error:
-                    raise ToolError(
-                        f"Could not read '{output_file_path}' from the sandbox: "
-                        f"{type(error).__name__}: {error}. "
-                        "Check that the code actually wrote the file to that path."
-                    ) from error
+                for output_file_path in output_files:
 
-                if len(data) > _settings.sandbox_max_file_size:
-                    raise ToolError(
-                        f"Output file too large ({len(data):,} bytes). "
-                        f"Limit is {_settings.sandbox_max_file_size:,} bytes."
-                    )
+                    try:
+                        data = await to_thread(copy_out, sandbox, output_file_path)
+                    except Exception as error:
+                        raise ToolError(
+                            f"Could not read '{output_file_path}' from the sandbox: "
+                            f"{type(error).__name__}: {error}. "
+                            "Check that the code actually wrote the file to that path."
+                        ) from error
 
-                file_name = Path(output_file_path).name
+                    if len(data) > _settings.sandbox_max_file_size:
+                        raise ToolError(
+                            f"Output file too large ({len(data):,} bytes). "
+                            f"Limit is {_settings.sandbox_max_file_size:,} bytes."
+                        )
 
-                try:
-                    uploaded = await upload_file(
-                        file_name=file_name,
-                        data=data,
-                        content_type="application/octet-stream",
-                        token=token.token,
-                    )
-                except RuntimeError as error:
-                    raise ToolError(
-                        f"Could not upload output file '{file_name}' "
-                        f"to OpenWebUI: {error}"
-                    ) from error
+                    file_name = Path(output_file_path).name
 
-                output_file = OutputFile(
-                    file_name=uploaded.file_name or file_name,
-                    file_size=len(data),
-                    download_url=uploaded.download_url,
-                )
+                    try:
+                        uploaded_file = await upload_file(
+                            file_name=file_name,
+                            data=data,
+                            content_type=(
+                                guess_type(file_name)[0]
+                                or "application/octet-stream"
+                            ),
+                            token=token.token,
+                        )
+                    except RuntimeError as error:
+                        raise ToolError(
+                            f"Could not upload output file '{file_name}' "
+                            f"to OpenWebUI: {error}"
+                        ) from error
+
+                    uploaded_files.append(OutputFile(
+                        name=uploaded_file.name or file_name,
+                        size=len(data),
+                        download_url=uploaded_file.download_url,
+                    ))
 
     return ExecResult(
         exit_code=output.exit_code,
         stdout=Text.from_ansi(output.stdout).plain,
         stderr=Text.from_ansi(output.stderr).plain,
-        output_file=output_file,
+        output_files=uploaded_files,
     )
 
 

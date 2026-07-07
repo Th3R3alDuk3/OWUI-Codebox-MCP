@@ -1,6 +1,6 @@
 [project]
 name = "owui-codebox-mcp"
-version = "0.4.1"
+version = "0.4.2"
 description = "Disposable code sandbox MCP server for OpenWebUI."
 readme = "README.md"
 license = "MIT"

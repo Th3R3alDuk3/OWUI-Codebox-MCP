@@ -18,6 +18,9 @@ _settings = get_settings()
 # Languages llm-sandbox ships handlers for.
 Lang = Literal["python", "java", "javascript", "cpp", "go", "ruby", "r"]
 
+# Working directory inside every sandbox, shared by all language tools.
+WORKDIR = "/sandbox"
+
 # Server-wide and per-user concurrency limits, shared by every language tool.
 _server_slots = Semaphore(_settings.max_concurrent_sandboxes)
 _user_slots: Counter[str] = Counter()
@@ -27,7 +30,6 @@ _user_slots: Counter[str] = Counter()
 async def open_sandbox(
     lang: Lang,
     image: str | None = None,
-    environment: dict[str, str] | None = None,
     skip_environment_setup: bool = False,
 ) -> AsyncIterator[BaseSession]:
 
@@ -37,7 +39,7 @@ async def open_sandbox(
     async with _server_slots:
 
         sandbox = await to_thread(
-            _open_sandbox, lang, image, environment, skip_environment_setup)
+            _open_sandbox, lang, image, skip_environment_setup)
 
         try:
             yield sandbox
@@ -49,7 +51,6 @@ async def open_sandbox(
 def _open_sandbox(
     lang: Lang,
     image: str | None = None,
-    environment: dict[str, str] | None = None,
     skip_environment_setup: bool = False,
 ) -> BaseSession:
 
@@ -58,10 +59,9 @@ def _open_sandbox(
         backend=SandboxBackend(_settings.container_backend),
         lang=lang,
         image=image or None,
-        workdir="/sandbox",
+        workdir=WORKDIR,
         runtime_configs={
             "name": f"sandbox-{uuid4().hex[:8]}",
-            "environment": environment or {},
             "mem_limit": _settings.sandbox_max_memory,
             "memswap_limit": _settings.sandbox_max_memory,
             "nano_cpus": int(_settings.sandbox_max_cpus * 1_000_000_000),
@@ -104,12 +104,14 @@ async def user_slot(
 
 def copy_into(
     sandbox: BaseSession,
-    file_name: str,
+    file_path: str,
     data: bytes,
 ) -> None:
 
-    file_name = Path(file_name).name
-    file_path = Path(sandbox.config.workdir).joinpath(file_name)
+    file_path = Path(file_path)
+
+    if not file_path.is_absolute():
+        file_path = Path(sandbox.config.workdir).joinpath(file_path)
 
     with NamedTemporaryFile(delete=True) as tmp_file:
 

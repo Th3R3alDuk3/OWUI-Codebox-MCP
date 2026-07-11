@@ -116,8 +116,8 @@ async def run_python(
                     await to_thread(copy_into, sandbox, input_file.path, data)
                 except Exception as error:
                     raise ToolError(
-                        f"Could not copy '{input_file.path}' into the sandbox: "
-                        f"{type(error).__name__}: {error}."
+                        f"Could not copy '{input_file.path}' into the sandbox. "
+                        "Check that the path is a valid absolute file path."
                     ) from error
 
             try:
@@ -145,8 +145,7 @@ async def run_python(
                         data = await to_thread(copy_out, sandbox, output_file_path)
                     except Exception as error:
                         raise ToolError(
-                            f"Could not read '{output_file_path}' from the sandbox: "
-                            f"{type(error).__name__}: {error}. "
+                            f"Could not read '{output_file_path}' from the sandbox. "
                             "Check that the code actually wrote the file to that path."
                         ) from error
 
@@ -159,7 +158,7 @@ async def run_python(
                     file_name = Path(output_file_path).name
 
                     try:
-                        uploaded_file = await upload_file(
+                        download_url = await upload_file(
                             file_name=file_name,
                             data=data,
                             content_type=(
@@ -175,9 +174,9 @@ async def run_python(
                         ) from error
 
                     uploaded_files.append(OutputFile(
-                        name=uploaded_file.name or file_name,
+                        name=file_name,
                         size=len(data),
-                        download_url=uploaded_file.download_url,
+                        download_url=download_url,
                     ))
 
     return ExecResult(

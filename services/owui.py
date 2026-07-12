@@ -37,11 +37,11 @@ async def download_file(
 
     except HTTPStatusError as error:
         raise RuntimeError(
-            f"OpenWebUI rejected the download. Detail: {error}"
+            "OpenWebUI rejected the download."
         ) from error
     except RequestError as error:
         raise RuntimeError(
-            f"Could not reach OpenWebUI. Detail: {error}"
+            "Could not reach OpenWebUI."
         ) from error
 
 
@@ -76,9 +76,9 @@ async def upload_file(
 
     except HTTPStatusError as error:
         raise RuntimeError(
-            f"OpenWebUI rejected the upload. Detail: {error}"
+            "OpenWebUI rejected the upload."
         ) from error
     except RequestError as error:
         raise RuntimeError(
-            f"Could not reach OpenWebUI. Detail: {error}"
+            "Could not reach OpenWebUI."
         ) from error

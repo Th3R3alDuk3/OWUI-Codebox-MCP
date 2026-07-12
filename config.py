@@ -1,5 +1,4 @@
 from functools import cache
-from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,10 +22,7 @@ class Settings(BaseSettings):
     rate_limit_rps: float
     rate_limit_burst: int
 
-    container_backend: Literal["docker", "podman"]
-    # One image per language; add more as language tools are
-    # added (e.g. sandbox_image_go).
-    sandbox_image_python: str
+    sandbox_image: str
     sandbox_max_memory: str
     sandbox_max_cpus: float
     # seconds

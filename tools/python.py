@@ -21,13 +21,80 @@ from models.sandbox import (
     PackageListing,
 )
 from services.owui import download_file, upload_file
-from tools._sandbox import WORKDIR, copy_into, copy_out, open_sandbox, user_slot
+from tools._sandbox import (
+    WORKDIR,
+    copy_into,
+    copy_out,
+    isolate_network,
+    open_sandbox,
+    user_slot,
+)
 
 _settings = get_settings()
+
 
 # The image is fixed for the process lifetime, so one listing serves all calls.
 _packages_lock = Lock()
 _packages_cache: PackageListing | None = None
+
+
+@tool(
+    name="list_python_packages",
+    tags={"python", "packages"},
+    description=(
+        "List the Python packages preinstalled in the Python sandbox image. "
+        "Call this once before the first `run_python` call that needs "
+        "third-party libraries and prefer preinstalled packages: they resolve "
+        "instantly when named in run_python's `libraries`, anything else is "
+        "downloaded at call time. The listing is cached, so only the first "
+        "call starts a container."
+    ),
+)
+async def list_python_packages() -> PackageListing:
+
+    global _packages_cache
+
+    async with _packages_lock:
+
+        if _packages_cache is None:
+
+            try:
+                async with open_sandbox(
+                    _settings.sandbox_image,
+                    skip_environment_setup=True,
+                ) as sandbox:
+                    output = await to_thread(
+                        sandbox.execute_commands,
+                        ["pip list --format=json --disable-pip-version-check"],
+                    )
+            except ToolError:
+                raise
+            except Exception as error:
+                raise ToolError(
+                    f"Could not inspect sandbox image "
+                    f"'{_settings.sandbox_image}'."
+                ) from error
+
+            if output.exit_code != 0:
+                raise ToolError(
+                    f"Could not list packages: {output.stderr or output.stdout}")
+
+            try:
+                entries = loads(output.stdout.strip())
+            except ValueError as error:
+                raise ToolError(
+                    "Unexpected output from pip list."
+                ) from error
+
+            _packages_cache = PackageListing(
+                image=_settings.sandbox_image,
+                packages=[
+                    InstalledPackage(name=entry["name"], version=entry["version"])
+                    for entry in entries
+                ],
+            )
+
+    return _packages_cache
 
 
 @tool(
@@ -41,14 +108,18 @@ _packages_cache: PackageListing | None = None
         f"{_settings.sandbox_exec_timeout:.0f}s; files are limited to "
         f"{_settings.sandbox_max_file_size:,} bytes each.\n\n"
         "List every non-stdlib import in `libraries` (e.g. ['pandas', "
-        "'matplotlib']). Packages preinstalled in the sandbox image (see "
-        "the `list_python_packages` tool) resolve instantly; anything else is "
+        "'matplotlib']). Check `list_python_packages` first and prefer "
+        "preinstalled packages — they resolve instantly; anything else is "
         "downloaded before the run.\n\n"
         "To use files the user attached, list them in `input_files`, each with "
         "its OpenWebUI file ID and the sandbox path the code reads it from. "
         "To return files the code produces, list their paths in "
         "`output_files` in the same call — otherwise they are lost when the "
-        "container is destroyed."
+        "container is destroyed.\n\n"
+        "The sandbox is cut off the network before the code runs, so the code "
+        "itself cannot download anything. Get packages via `libraries` "
+        "(installed while the network is still up) and data via `input_files` — "
+        "never via URLs in the code."
     ),
 )
 async def run_python(
@@ -89,8 +160,11 @@ async def run_python(
     async with user_slot(user_id):
 
         async with open_sandbox(
-            "python",
-            _settings.sandbox_image_python,
+            _settings.sandbox_image,
+            # The venv exists only for pip installs and costs ~4s per call.
+            skip_environment_setup=not libraries,
+            # Nothing to install → never give the container a network.
+            offline=not libraries,
         ) as sandbox:
 
             for input_file in input_files:
@@ -103,7 +177,8 @@ async def run_python(
                 except RuntimeError as error:
                     raise ToolError(
                         f"Could not fetch input file '{input_file.id}' "
-                        f"from OpenWebUI: {error}"
+                        "from OpenWebUI. Check that the ID belongs to a file "
+                        "the user actually attached."
                     ) from error
 
                 if len(data) > _settings.sandbox_max_file_size:
@@ -120,8 +195,26 @@ async def run_python(
                         "Check that the path is a valid absolute file path."
                     ) from error
 
+            if libraries:
+
+                try:
+                    await to_thread(sandbox.install, libraries)
+                except Exception as error:
+                    raise ToolError(
+                        "Could not install the requested libraries. "
+                        "Check the package names."
+                    ) from error
+
+                try:
+                    await to_thread(isolate_network, sandbox)
+                except Exception as error:
+                    raise ToolError(
+                        "Could not cut the sandbox off the network; "
+                        "refusing to run the code."
+                    ) from error
+
             try:
-                output: ConsoleOutput = await to_thread(sandbox.run, code, libraries)
+                output: ConsoleOutput = await to_thread(sandbox.run, code)
             except SandboxTimeoutError as error:
                 raise ToolError(
                     f"Execution timed out after "
@@ -132,8 +225,17 @@ async def run_python(
                 ) from error
             except Exception as error:
                 raise ToolError(
-                    f"Sandbox execution failed: {error}"
+                    "Sandbox execution failed unexpectedly."
                 ) from error
+
+            # Timeout and OOM kill with exit 137, no output, no exception.
+            if output.exit_code == 137:
+                raise ToolError(
+                    "The run was killed by a resource limit — either the "
+                    f"{_settings.sandbox_exec_timeout:.0f}s execution timeout "
+                    f"or the {_settings.sandbox_max_memory} memory cap. "
+                    "Make the code faster or use less memory."
+                )
 
             uploaded_files: list[OutputFile] = []
 
@@ -170,7 +272,7 @@ async def run_python(
                     except RuntimeError as error:
                         raise ToolError(
                             f"Could not upload output file '{file_name}' "
-                            f"to OpenWebUI: {error}"
+                            "to OpenWebUI."
                         ) from error
 
                     uploaded_files.append(OutputFile(
@@ -185,59 +287,3 @@ async def run_python(
         stderr=Text.from_ansi(output.stderr).plain,
         output_files=uploaded_files,
     )
-
-
-@tool(
-    name="list_python_packages",
-    tags={"python", "packages"},
-    description=(
-        "List the Python packages preinstalled in the Python sandbox image. "
-        "Packages listed here resolve instantly when named in run_python's "
-        "`libraries`; anything else is downloaded at call time. The listing "
-        "is cached, so only the first call starts a container."
-    ),
-)
-async def list_python_packages() -> PackageListing:
-
-    global _packages_cache
-
-    async with _packages_lock:
-
-        if _packages_cache is None:
-
-            try:
-                async with open_sandbox(
-                    "python", _settings.sandbox_image_python, skip_environment_setup=True
-                ) as sandbox:
-                    output = await to_thread(
-                        sandbox.execute_commands,
-                        ["pip list --format=json --disable-pip-version-check"],
-                    )
-            except Exception as error:
-                raise ToolError(
-                    f"Could not inspect sandbox image "
-                    f"'{_settings.sandbox_image_python}': "
-                    f"{type(error).__name__}: {error}"
-                ) from error
-
-            if output.exit_code != 0:
-                raise ToolError(
-                    f"Could not list packages: {output.stderr or output.stdout}")
-
-            try:
-                entries = loads(output.stdout.strip())
-            except ValueError as error:
-                raise ToolError(
-                    f"Unexpected output from pip list: {error}"
-                ) from error
-
-            _packages_cache = PackageListing(
-                image=_settings.sandbox_image_python,
-                packages=[
-                    InstalledPackage(name=entry["name"], version=entry["version"])
-                    for entry in entries
-                ],
-            )
-
-    return _packages_cache
-

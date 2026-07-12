@@ -4,7 +4,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Literal
 from uuid import uuid4
 
 from fastmcp.exceptions import ToolError
@@ -15,68 +14,10 @@ from config import get_settings
 
 _settings = get_settings()
 
-# Languages llm-sandbox ships handlers for.
-Lang = Literal["python", "java", "javascript", "cpp", "go", "ruby", "r"]
-
-# Working directory inside every sandbox, shared by all language tools.
 WORKDIR = "/sandbox"
 
-# Server-wide and per-user concurrency limits, shared by every language tool.
 _server_slots = Semaphore(_settings.max_concurrent_sandboxes)
 _user_slots: Counter[str] = Counter()
-
-
-@asynccontextmanager
-async def open_sandbox(
-    lang: Lang,
-    image: str | None = None,
-    skip_environment_setup: bool = False,
-) -> AsyncIterator[BaseSession]:
-
-    if _server_slots.locked():
-        raise ToolError("Server at capacity. Try again later.")
-
-    async with _server_slots:
-
-        sandbox = await to_thread(
-            _open_sandbox, lang, image, skip_environment_setup)
-
-        try:
-            yield sandbox
-        finally:
-            with suppress(Exception):
-                await to_thread(sandbox.close)
-
-
-def _open_sandbox(
-    lang: Lang,
-    image: str | None = None,
-    skip_environment_setup: bool = False,
-) -> BaseSession:
-
-    sandbox = SandboxSession(
-        skip_environment_setup=skip_environment_setup,
-        backend=SandboxBackend(_settings.container_backend),
-        lang=lang,
-        image=image or None,
-        workdir=WORKDIR,
-        runtime_configs={
-            "name": f"sandbox-{uuid4().hex[:8]}",
-            "mem_limit": _settings.sandbox_max_memory,
-            "memswap_limit": _settings.sandbox_max_memory,
-            "nano_cpus": int(_settings.sandbox_max_cpus * 1_000_000_000),
-            "pids_limit": 512,
-            "cap_drop": ["ALL"],
-            "cap_add": ["DAC_OVERRIDE"],
-            "security_opt": ["no-new-privileges"],
-        },
-        execution_timeout=_settings.sandbox_exec_timeout,
-        session_timeout=_settings.sandbox_exec_timeout,
-        verbose=False,
-    )
-
-    sandbox.open()
-    return sandbox
 
 
 @asynccontextmanager
@@ -100,6 +41,93 @@ async def user_slot(
 
         if not _user_slots[user_id]:
             del _user_slots[user_id]
+
+
+@asynccontextmanager
+async def open_sandbox(
+    image: str,
+    skip_environment_setup: bool = False,
+    offline: bool = False,
+) -> AsyncIterator[BaseSession]:
+
+    if _server_slots.locked():
+        raise ToolError("Server at capacity. Try again later.")
+
+    async with _server_slots:
+
+        try:
+            sandbox = await to_thread(
+                _open_sandbox, image, skip_environment_setup, offline)
+        except Exception as error:
+            raise ToolError(
+                "Could not start the sandbox container. Try again later."
+            ) from error
+
+        try:
+            yield sandbox
+        finally:
+            with suppress(Exception):
+                await to_thread(sandbox.close)
+
+
+def _open_sandbox(
+    image: str,
+    skip_environment_setup: bool = False,
+    offline: bool = False,
+) -> BaseSession:
+
+    runtime_configs = {
+        "name": f"sandbox-{uuid4().hex[:8]}",
+        # The keep-alive ignores SIGTERM; SIGKILL skips Docker's 10s grace.
+        "stop_signal": "SIGKILL",
+        "mem_limit": _settings.sandbox_max_memory,
+        "memswap_limit": _settings.sandbox_max_memory,
+        "nano_cpus": int(_settings.sandbox_max_cpus * 1_000_000_000),
+        "pids_limit": 512,
+        "cap_drop": ["ALL"],
+        "cap_add": ["DAC_OVERRIDE"],
+        "security_opt": ["no-new-privileges"],
+    }
+
+    if offline:
+        runtime_configs["network_mode"] = "none"
+
+    sandbox = SandboxSession(
+        skip_environment_setup=skip_environment_setup,
+        backend=SandboxBackend.DOCKER,
+        lang="python",
+        image=image,
+        workdir=WORKDIR,
+        runtime_configs=runtime_configs,
+        execution_timeout=_settings.sandbox_exec_timeout,
+        session_timeout=_settings.sandbox_exec_timeout,
+        verbose=False,
+    )
+
+    sandbox.open()
+    return sandbox
+
+
+def isolate_network(
+    sandbox: BaseSession,
+) -> None:
+    # Runs after `install`, so package repos stay reachable for `libraries`.
+    # Fails closed: raises unless the container ends up with no network.
+
+    sandbox.container.reload()
+    networks = sandbox.container.attrs["NetworkSettings"]["Networks"]
+
+    if not networks:
+        raise RuntimeError("container has no network to disconnect")
+
+    for network_name in networks:
+        sandbox.client.networks.get(network_name).disconnect(sandbox.container)
+
+    sandbox.container.reload()
+    remaining = sandbox.container.attrs["NetworkSettings"]["Networks"]
+
+    if remaining:
+        raise RuntimeError(f"network still attached: {', '.join(remaining)}")
 
 
 def copy_into(

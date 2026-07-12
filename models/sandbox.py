@@ -33,15 +33,12 @@ class ExecResult(BaseModel):
         description="Process exit code; 0 means the script ran successfully.",
     )
     stdout: str = Field(
-        default="",
         description="Everything the script printed to standard output.",
     )
     stderr: str = Field(
-        default="",
         description="Standard error output, including the traceback on failure.",
     )
     output_files: list[OutputFile] = Field(
-        default_factory=list,
         description=(
             "Files returned to the user, present only when `output_files` "
             "was set on the call and the run succeeded; otherwise empty."

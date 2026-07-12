@@ -2,8 +2,9 @@
 .gitignore
 .dockerignore
 .github/
+.claude/
 
 .env
 .venv/
 __pycache__/
-.ruff_cache
+.ruff_cache/

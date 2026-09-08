@@ -68,15 +68,17 @@ else dies with the container.
 | Image | Built from | Role | Published |
 |---|---|---|---|
 | `owui-codebox-mcp` | `Dockerfile` | The MCP server | ghcr.io, on `main` and tags |
-| `owui-codebox-sandbox` | `sandbox.Dockerfile` | Where user code runs | no, you build it |
+| `owui-codebox-sandbox` | `sandbox.Dockerfile` | Where user code runs | ghcr.io, on Dockerfile changes and monthly |
 
 The sandbox image is part of the standard setup. It adds a code-interpreter
 stack (numpy, pandas, polars, duckdb, scikit-learn, matplotlib, OpenCV,
 openpyxl, python-docx, pymupdf, reportlab, weasyprint, …) plus Latin, CJK and
 emoji fonts. It ships no HTTP client on purpose, since the sandbox is offline
-when the code runs. Rebuild it now and then to pick up security updates.
+when the code runs. Nothing in it is version-pinned, so CI rebuilds it monthly
+and `latest` picks up security updates.
 
-Point `SANDBOX_IMAGE` at another image if you prefer. A plain
+Build it as shown in Quick start, or skip the build and point `SANDBOX_IMAGE` at
+`ghcr.io/th3r3alduk3/owui-codebox-sandbox`. Any other image works too — a plain
 `python:3.13-trixie` needs no build but pays for every package at call time.
 
 A private package index can be baked in at build time:

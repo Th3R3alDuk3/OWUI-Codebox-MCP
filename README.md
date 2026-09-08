@@ -2,64 +2,144 @@
 
 [![Docker](https://github.com/Th3R3alDuk3/OWUI-Codebox-MCP/actions/workflows/docker.yml/badge.svg)](https://github.com/Th3R3alDuk3/OWUI-Codebox-MCP/actions/workflows/docker.yml)
 [![Version](https://img.shields.io/github/v/tag/Th3R3alDuk3/OWUI-Codebox-MCP?label=version)](https://github.com/Th3R3alDuk3/OWUI-Codebox-MCP/tags)
-[![Python](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.13%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/github/license/Th3R3alDuk3/OWUI-Codebox-MCP)](LICENSE)
 
-> Disposable Python sandboxes via MCP for OpenWebUI. Container-isolated, stateless, offline.
+> Disposable, stateless Python sandboxes for OpenWebUI via MCP.
 
-Python execution for OpenWebUI over the Model Context Protocol. The model
-sends a self-contained script; the server runs it in a fresh, hardened
-container (powered by [llm-sandbox](https://github.com/vndee/llm-sandbox)) —
-packages installed, attached files copied in, network cut, produced files
-uploaded back as download links — then the container is destroyed.
+The model sends a self-contained script. The server runs it in a fresh, hardened
+container: packages installed, attached files copied in, network cut, produced
+files uploaded back as download links. Then the container is destroyed. Built on
+[llm-sandbox](https://github.com/vndee/llm-sandbox).
 
 ---
 
 ## ✨ Highlights
 
-- **Disposable sandboxes** — every call gets a fresh container, removed
-  right after; nothing persists between calls
-- **Hardened by default** — capabilities dropped, `no-new-privileges`,
-  pids limit, hard RAM/CPU caps, execution timeout
-- **Network isolation** — packages install first, then the container is
-  detached from every network before user code runs
-- **Files in & out** — attached OpenWebUI files land at chosen sandbox
-  paths; produced files come back as download links
-- **Multi-user by design** — JWT auth against OpenWebUI's secret, per-user
-  sandbox cap, per-user rate limiting
-- **Prebuilt sandbox image** — optional code-interpreter stack (pandas,
-  matplotlib, opencv, PDF/office libs, …) with private-index support
+- **Disposable** — fresh container per call, removed right after
+- **Offline user code** — packages install first, then every network is cut
+- **Hardened** — dropped privileges and hard RAM, CPU and time limits
+- **Files in & out** — OpenWebUI attachments in, produced files back as links
+- **Multi-user** — JWT auth, per-user sandbox cap and rate limit
 
-## 🚀 Setup
+## 🚀 Quick start
 
-Requires **Docker** (daemon running).
+Requires **Docker** with a running daemon, and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync
 cp .env.example .env
-```
-
-`.env.example` documents every setting; the ones you must set:
-
-- `JWT_SECRET` → OpenWebUI's `WEBUI_SECRET_KEY`
-- `OWUI_BASE_URL` → OpenWebUI URL reachable from this server, e.g. `http://localhost:3000`
-- `OWUI_VERIFY_TLS` → set `false` only for self-signed or plain-HTTP lab setups
-
-## 🏃 Run
-
-```bash
+docker build -f sandbox.Dockerfile -t owui-codebox-sandbox .
 uv run python main.py
 ```
 
-The server listens on `0.0.0.0:8000`. Point OpenWebUI's MCP/tools config at
-`http://<host>:8000/mcp`. Requests must carry a JWT signed by `JWT_SECRET`
-with the OpenWebUI user's `id` claim.
+Set at least these in `.env`:
 
-## 🐳 Docker (optional)
+- `JWT_SECRET` → OpenWebUI's `WEBUI_SECRET_KEY`. Both sides need the same value.
+- `OWUI_BASE_URL` → OpenWebUI URL reachable from this server
+- `OWUI_VERIFY_TLS` → `false` only for self-signed or plain-HTTP setups
 
-Prebuilt images are published to **ghcr.io** on pushes to `main` (`latest`)
-and on version tags (`X.Y.Z`). The server needs a container runtime to start
-sandboxes — simplest is mounting the host socket (Docker-out-of-Docker):
+The server listens on `0.0.0.0:8000`. Point OpenWebUI's MCP config at
+`http://<host>:8000/mcp`. Requests must carry a JWT signed with `JWT_SECRET`
+that names the user in the `id` claim. The server speaks plain HTTP, so put a
+TLS reverse proxy in front of it outside a trusted network.
+
+## 🛠️ Tools
+
+| Tool | Description |
+|---|---|
+| `run_python` | Run a script in a fresh sandbox: install packages, read attached files, return produced files |
+| `list_python_packages` | List what is already installed in the sandbox image |
+
+```jsonc
+{
+  "code": "import pandas as pd; pd.DataFrame({'a': [1, 2]}).to_csv('/sandbox/result.csv')",
+  "output_files": ["/sandbox/result.csv"]
+}
+```
+
+Use `libraries` only for packages the image does not already ship. `input_files`
+pairs an OpenWebUI file ID with a sandbox path. Files the script writes come
+back only if they are listed in `output_files` in the same call — everything
+else dies with the container.
+
+## 🐳 Images
+
+| Image | Built from | Role | Published |
+|---|---|---|---|
+| `owui-codebox-mcp` | `Dockerfile` | The MCP server | ghcr.io, on `main` and tags |
+| `owui-codebox-sandbox` | `sandbox.Dockerfile` | Where user code runs | no, you build it |
+
+The sandbox image is part of the standard setup. It adds a code-interpreter
+stack (numpy, pandas, polars, duckdb, scikit-learn, matplotlib, OpenCV,
+openpyxl, python-docx, pymupdf, reportlab, weasyprint, …) plus Latin, CJK and
+emoji fonts. It ships no HTTP client on purpose, since the sandbox is offline
+when the code runs. Rebuild it now and then to pick up security updates.
+
+Point `SANDBOX_IMAGE` at another image if you prefer. A plain
+`python:3.13-trixie` needs no build but pays for every package at call time.
+
+A private package index can be baked in at build time:
+
+```bash
+docker build -f sandbox.Dockerfile \
+  --build-arg PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
+  --build-arg PIP_TRUSTED_HOST=nexus.example.com \
+  -t owui-codebox-sandbox .
+```
+
+## ⚙️ Configuration
+
+`.env.example` documents every setting.
+
+| Variable | Purpose |
+|---|---|
+| `JWT_SECRET` | OpenWebUI's `WEBUI_SECRET_KEY`; required |
+| `OWUI_BASE_URL` | OpenWebUI URL, reachable from this server; required |
+| `OWUI_VERIFY_TLS` | Verify OpenWebUI's TLS certificate |
+| `SANDBOX_IMAGE` | Image user code runs in |
+| `SANDBOX_MAX_MEMORY` | Hard RAM ceiling per sandbox |
+| `SANDBOX_MAX_CPUS` | CPU cap per sandbox |
+| `SANDBOX_EXEC_TIMEOUT` | Seconds the script may run |
+| `SANDBOX_SESSION_TIMEOUT` | Whole container lifetime; keep it well above the exec timeout, installs count against it |
+| `SANDBOX_MAX_FILE_SIZE` | Bytes per transferred file |
+| `SANDBOX_MAX_FILES` | Input and output files per call |
+| `SANDBOX_MAX_LIBRARIES` | Packages per call |
+| `SANDBOX_MAX_OUTPUT` | Characters kept per output stream |
+| `MAX_CONCURRENT_SANDBOXES` | Server-wide sandbox cap |
+| `MAX_CONCURRENT_SANDBOXES_PER_USER` | Per-user sandbox cap |
+| `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | Per-user request rate |
+
+## 🔒 Security model
+
+**Isolation.** The container is the boundary. It runs with dropped privileges
+and hard limits on memory, CPU, processes and time. A Docker container is not a
+complete boundary against code attacking the kernel — for untrusted or public
+workloads, run Docker rootless and add gVisor or a microVM runtime.
+
+**Network.** A call without `libraries` gets a container with no network at all.
+With `libraries`, only the install step is online, and only pip runs in it.
+Afterwards the container is detached from every network. That cut is verified,
+and the call is refused if it cannot be confirmed. No internet, no LAN, not even
+OpenWebUI.
+
+**Files.** Sizes are checked before any bytes move: an input file stops
+downloading past the limit, an output file is inspected inside the sandbox
+first. Only regular files under `/sandbox` come back — directories, symlinks
+and paths outside it are rejected.
+
+**Errors.** Tool errors never carry exception text, so no URLs, hosts or stack
+traces leak into the chat. Anything unexpected is masked.
+
+**Known limits.** There is no disk quota per sandbox, so a run can fill Docker's
+storage until the timeout ends it. `SANDBOX_MAX_OUTPUT` is applied after the
+run, so a very noisy script can cost real server memory before the timeout stops
+it. And the Docker socket the server needs is as powerful as root on the host.
+
+## 📦 Docker deployment
+
+The server needs a container runtime to start sandboxes. The simplest way is to
+mount the host socket:
 
 ```bash
 docker run -d -p 8000:8000 \
@@ -70,54 +150,5 @@ docker run -d -p 8000:8000 \
 ghcr.io/th3r3alduk3/owui-codebox-mcp:latest
 ```
 
-Or build the image locally: `docker build -t owui-codebox-mcp .`
-
-## 🛠️ Tools
-
-| Tool | Description |
-|---|---|
-| `run_python` | execute a script in a fresh sandbox: install packages, read attached OpenWebUI files, upload produced files |
-| `list_python_packages` | list packages preinstalled in the sandbox image (cached) |
-
-The default sandbox image is the official `python:3.13-trixie` (pulled
-automatically on first use). For faster sandboxes, `sandbox.Dockerfile`
-extends it with a code-interpreter stack (numpy, pandas, matplotlib,
-scikit-learn, openpyxl, pymupdf, weasyprint, opencv, …) and fonts for
-HTML→PDF; a private package index can be baked in via build args:
-
-```bash
-docker build -f sandbox.Dockerfile \
-  --build-arg PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
-  --build-arg PIP_TRUSTED_HOST=nexus.example.com \
-  -t owui-codebox-sandbox .
-```
-
-Then set `SANDBOX_IMAGE=owui-codebox-sandbox` in `.env`.
-
-## 🔒 Sandboxing & limits
-
-- The container is the isolation boundary: all capabilities dropped (only
-  `DAC_OVERRIDE` kept, which llm-sandbox needs), `no-new-privileges`, pids
-  limit, no swap (`SANDBOX_MAX_MEMORY` is a hard ceiling), CPU cap
-  (`SANDBOX_MAX_CPUS`). Tighten further as needed (locked-down image, gVisor, …).
-- **Network**: user code always runs offline. A call without `libraries`
-  gets a container with no network at all; a call with `libraries` installs
-  them first (the only online window, and only pip runs in it), then the
-  container is detached from every network — verified cut, or the call is
-  refused — before the code runs. No internet, no LAN, not even OpenWebUI.
-- **Known gap — disk**: no per-sandbox quota (Docker's `storage_opt` needs
-  overlay2 on xfs); a run can fill `/var/lib/docker` until the timeout
-  tears the container down — monitor free space.
-- Every call pays the container start (plus, the first time, the image
-  pull) — well under a second without `libraries`; requesting `libraries`
-  adds the venv setup and pip installs.
-- `SANDBOX_EXEC_TIMEOUT` (seconds) caps a call; `SANDBOX_MAX_FILE_SIZE`
-  (bytes) caps each transferred file.
-- `MAX_CONCURRENT_SANDBOXES` caps sandboxes server-wide,
-  `MAX_CONCURRENT_SANDBOXES_PER_USER` per user; on top, requests are
-  rate-limited per user (`RATE_LIMIT_RPS` sustained, `RATE_LIMIT_BURST`
-  burst), keyed on the JWT's `id` claim.
-- **No internals in errors**: only deliberately raised tool errors reach the
-  model, and they never embed exception text — no URLs, hosts or stack
-  traces leak into the chat; anything unexpected is masked by the server.
-- The server speaks plain HTTP — put it behind a reverse proxy for TLS.
+Build the sandbox image on the host, not inside the server container — it has to
+exist on the same Docker daemon the server reaches through that socket.

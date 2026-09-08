@@ -9,11 +9,8 @@ from tools import TOOLS
 settings = get_settings()
 
 INSTRUCTIONS = """
-OWUI-Codebox-MCP runs Python in disposable, isolated containers (powered by
-llm-sandbox): every call gets a fresh sandbox that is torn down right after, so
-nothing persists between calls. Call `list_python_packages` first to see which
-packages are preinstalled in the sandbox image and prefer those; `run_python`
-documents its full usage — including how to pass files in and out.
+Runs Python in disposable, isolated containers: every call gets a fresh sandbox
+that is torn down right after, so nothing persists between calls.
 """.strip()
 
 mcp = FastMCP(

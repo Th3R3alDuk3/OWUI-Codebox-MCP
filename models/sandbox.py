@@ -21,27 +21,24 @@ class OutputFile(BaseModel):
         description="Size of the returned file in bytes.",
     )
     download_url: str = Field(
-        description=(
-            "Direct OpenWebUI download link for the file. Give this URL to the "
-            "user so they can download the file the code produced."
-        ),
+        description="Download link — give this URL to the user.",
     )
 
 
 class ExecResult(BaseModel):
     exit_code: int = Field(
-        description="Process exit code; 0 means the script ran successfully.",
+        description="Exit code; 0 means the script ran successfully.",
     )
     stdout: str = Field(
-        description="Everything the script printed to standard output.",
+        description="Standard output.",
     )
     stderr: str = Field(
         description="Standard error output, including the traceback on failure.",
     )
     output_files: list[OutputFile] = Field(
         description=(
-            "Files returned to the user, present only when `output_files` "
-            "was set on the call and the run succeeded; otherwise empty."
+            "Files returned to the user; empty unless `output_files` was set "
+            "and the run succeeded."
         ),
     )
 

@@ -12,13 +12,11 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_ROOT_USER_ACTION=ignore \
     MPLBACKEND=Agg
 
-# Pango/HarfBuzz: WeasyPrint runtime deps. Fonts: the base image only ships
-# 8 DejaVu faces (no italic, no Arial/Times metric equivalents) — too little
-# for HTML/PDF rendering.
+# Pango/HarfBuzz: WeasyPrint deps. Noto: the base image has no CJK and no emoji.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
-        fonts-dejavu fonts-liberation \
+        fonts-dejavu fonts-liberation fonts-noto-cjk fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \
@@ -30,9 +28,9 @@ RUN pip install --no-cache-dir \
     pillow imageio opencv-python-headless \
     # office / document formats
     openpyxl xlsxwriter xlrd python-docx python-pptx \
-    pypdf pdfplumber pymupdf reportlab weasyprint fpdf2 \
-    # web & parsing
-    requests httpx beautifulsoup4 lxml html5lib \
+    pypdf pdfplumber pymupdf reportlab weasyprint \
+    # parsing only — the sandbox is offline at run time
+    beautifulsoup4 lxml \
     # misc
     pyyaml tabulate markdown jinja2 networkx tqdm rapidfuzz qrcode wordcloud
 

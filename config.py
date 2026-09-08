@@ -25,12 +25,20 @@ class Settings(BaseSettings):
     sandbox_image: str
     sandbox_max_memory: str
     sandbox_max_cpus: float
-    # seconds
+    # seconds; the code run
     sandbox_exec_timeout: float
+    # seconds; whole container lifetime
+    sandbox_session_timeout: float
     # bytes
     sandbox_max_file_size: int
+    # characters, per stream
+    sandbox_max_output: int
+    # per call, for input_files and output_files each
+    sandbox_max_files: int
+    # per call
+    sandbox_max_libraries: int
 
 
 @cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings()  # pyright: ignore[reportCallIssue]

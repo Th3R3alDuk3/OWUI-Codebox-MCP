@@ -1,14 +1,14 @@
 from asyncio import Semaphore, to_thread
 from collections import Counter
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from shlex import quote
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
 from fastmcp.exceptions import ToolError
-from llm_sandbox import SandboxBackend, SandboxSession
-from llm_sandbox.core.session_base import BaseSession
+from llm_sandbox.docker import SandboxDockerSession
 
 from config import get_settings
 
@@ -23,7 +23,7 @@ _user_slots: Counter[str] = Counter()
 @asynccontextmanager
 async def user_slot(
     user_id: str,
-) -> AsyncIterator[None]:
+) -> AsyncGenerator[None]:
 
     if _user_slots[user_id] >= _settings.max_concurrent_sandboxes_per_user:
         raise ToolError(
@@ -48,8 +48,9 @@ async def open_sandbox(
     image: str,
     skip_environment_setup: bool = False,
     offline: bool = False,
-) -> AsyncIterator[BaseSession]:
+) -> AsyncGenerator[SandboxDockerSession]:
 
+    # The acquire fast path never suspends, so this cannot race the acquire.
     if _server_slots.locked():
         raise ToolError("Server at capacity. Try again later.")
 
@@ -57,7 +58,11 @@ async def open_sandbox(
 
         try:
             sandbox = await to_thread(
-                _open_sandbox, image, skip_environment_setup, offline)
+                _open_sandbox,
+                image,
+                skip_environment_setup,
+                offline,
+            )
         except Exception as error:
             raise ToolError(
                 "Could not start the sandbox container. Try again later."
@@ -72,9 +77,9 @@ async def open_sandbox(
 
 def _open_sandbox(
     image: str,
-    skip_environment_setup: bool = False,
-    offline: bool = False,
-) -> BaseSession:
+    skip_environment_setup: bool,
+    offline: bool,
+) -> SandboxDockerSession:
 
     runtime_configs = {
         "name": f"sandbox-{uuid4().hex[:8]}",
@@ -92,15 +97,16 @@ def _open_sandbox(
     if offline:
         runtime_configs["network_mode"] = "none"
 
-    sandbox = SandboxSession(
+    sandbox = SandboxDockerSession(
         skip_environment_setup=skip_environment_setup,
-        backend=SandboxBackend.DOCKER,
+        # Without this a freshly pulled image is deleted again on close.
+        keep_template=True,
         lang="python",
         image=image,
         workdir=WORKDIR,
         runtime_configs=runtime_configs,
         execution_timeout=_settings.sandbox_exec_timeout,
-        session_timeout=_settings.sandbox_exec_timeout,
+        session_timeout=_settings.sandbox_session_timeout,
         verbose=False,
     )
 
@@ -109,10 +115,10 @@ def _open_sandbox(
 
 
 def isolate_network(
-    sandbox: BaseSession,
+    sandbox: SandboxDockerSession,
 ) -> None:
+
     # Runs after `install`, so package repos stay reachable for `libraries`.
-    # Fails closed: raises unless the container ends up with no network.
 
     sandbox.container.reload()
     networks = sandbox.container.attrs["NetworkSettings"]["Networks"]
@@ -131,34 +137,53 @@ def isolate_network(
 
 
 def copy_into(
-    sandbox: BaseSession,
+    sandbox: SandboxDockerSession,
     file_path: str,
     data: bytes,
 ) -> None:
 
-    file_path = Path(file_path)
+    sandbox_path = Path(WORKDIR, file_path).as_posix()
 
-    if not file_path.is_absolute():
-        file_path = Path(sandbox.config.workdir).joinpath(file_path)
+    if not sandbox_path.startswith(f"{WORKDIR}/"):
+        raise ValueError("path outside the sandbox workdir")
 
     with NamedTemporaryFile(delete=True) as tmp_file:
 
         tmp_file.write(data)
         tmp_file.flush()
 
-        sandbox.copy_to_runtime(tmp_file.name, file_path.as_posix())
+        sandbox.copy_to_runtime(tmp_file.name, sandbox_path)
 
 
 def copy_out(
-    sandbox: BaseSession,
+    sandbox: SandboxDockerSession,
     file_path: str,
+    max_size: int,
 ) -> bytes:
 
-    file_path = Path(file_path)
+    sandbox_path = Path(WORKDIR, file_path).as_posix()
 
-    if not file_path.is_absolute():
-        file_path = Path(sandbox.config.workdir).joinpath(file_path)
+    if not sandbox_path.startswith(f"{WORKDIR}/"):
+        raise ValueError("path outside the sandbox workdir")
+
+    # Checked in the sandbox: the export below buffers the whole tree in memory.
+    probe = sandbox.execute_commands(
+        [f"stat -c %F:%s -- {quote(sandbox_path)}"],
+        WORKDIR,
+    )
+
+    if probe.exit_code != 0:
+        raise FileNotFoundError(sandbox_path)
+
+    file_type, _, size = probe.stdout.strip().partition(":")
+
+    # Also matches "regular empty file".
+    if not file_type.startswith("regular"):
+        raise ValueError("not a regular file")
+
+    if not size.isdigit() or int(size) > max_size:
+        raise ValueError("output file exceeds max_size")
 
     with NamedTemporaryFile(delete=True) as tmp_file:
-        sandbox.copy_from_runtime(file_path.as_posix(), tmp_file.name)
+        sandbox.copy_from_runtime(sandbox_path, tmp_file.name)
         return Path(tmp_file.name).read_bytes()

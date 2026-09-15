@@ -82,6 +82,8 @@ def _open_sandbox(
 ) -> SandboxDockerSession:
 
     runtime_configs = {
+        # Explicit selection: Docker must fail if the runtime is unavailable.
+        "runtime": _settings.sandbox_runtime,
         "name": f"sandbox-{uuid4().hex[:8]}",
         # The keep-alive ignores SIGTERM; SIGKILL skips Docker's 10s grace.
         "stop_signal": "SIGKILL",
@@ -110,7 +112,13 @@ def _open_sandbox(
         verbose=False,
     )
 
-    sandbox.open()
+    try:
+        sandbox.open()
+    except BaseException:
+        # A failed runtime start can leave a container and session timer behind.
+        with suppress(Exception):
+            sandbox.close()
+        raise
     return sandbox
 
 

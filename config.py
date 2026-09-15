@@ -1,4 +1,5 @@
 from functools import cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,6 +24,7 @@ class Settings(BaseSettings):
     rate_limit_burst: int
 
     sandbox_image: str
+    sandbox_runtime: Literal["runsc", "runc"] = "runsc"
     sandbox_max_memory: str
     sandbox_max_cpus: float
     # seconds; the code run

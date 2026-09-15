@@ -1,4 +1,4 @@
-FROM python:3.13-trixie
+FROM python:3.14-trixie
 
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG PIP_TRUSTED_HOST=

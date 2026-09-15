@@ -10,6 +10,7 @@ from fastmcp.server.auth import AccessToken
 from fastmcp.tools import tool
 from llm_sandbox import ConsoleOutput
 from llm_sandbox.exceptions import SandboxTimeoutError
+from packaging.requirements import InvalidRequirement, Requirement
 from pydantic import Field
 from rich.text import Text
 
@@ -132,8 +133,10 @@ async def run_python(
         default_factory=list,
         max_length=_settings.sandbox_max_libraries,
         description=(
-            "Packages to pip-install first. Required for every non-stdlib "
-            "import, e.g. ['numpy', 'pandas']."
+            "Only packages missing from the sandbox image; check "
+            "list_python_packages first. Use package names with optional "
+            "versions or extras. Only compatible prebuilt wheels are accepted; "
+            "source builds, URLs, local paths and pip options are not supported."
         ),
     ),
     input_files: list[InputFile] = Field(
@@ -155,6 +158,18 @@ async def run_python(
     token: AccessToken = CurrentAccessToken(),
     user_id: str = TokenClaim("id"),
 ) -> ExecResult:
+
+    # Explicit source URLs/paths and pip options could bypass wheel-only installs.
+    for library in libraries:
+        try:
+            requirement = Requirement(library)
+        except InvalidRequirement as error:
+            raise ToolError(
+                "Libraries must be package names with optional versions or extras. "
+                "URLs, local paths and pip options are not supported."
+            ) from error
+        if requirement.url is not None:
+            raise ToolError("Library URLs are not supported; use package names.")
 
     async with (
         user_slot(user_id),
@@ -202,7 +217,7 @@ async def run_python(
                 installed = await to_thread(
                     sandbox.execute_commands,
                     [
-                        f"{sandbox.pip_executable_path} install "
+                        f"{sandbox.pip_executable_path} install --only-binary=:all: -- "
                         + " ".join(quote(library) for library in libraries)
                     ],
                     WORKDIR,
@@ -215,7 +230,9 @@ async def run_python(
             if installed.exit_code != 0:
                 raise ToolError(
                     "Could not install the requested libraries. "
-                    "Check the package names."
+                    "Check the package names and versions. Each package and its "
+                    "dependencies must have a compatible prebuilt wheel for the "
+                    "sandbox's Python version and platform; source builds are disabled."
                 )
 
             try:

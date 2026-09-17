@@ -27,7 +27,10 @@ class OutputFile(BaseModel):
 
 class ExecResult(BaseModel):
     exit_code: int = Field(
-        description="Exit code; 0 means the script ran successfully.",
+        description=(
+            "Exit code; 0 means success, -1 means killed "
+            "(out of memory, a native crash or too much output)."
+        ),
     )
     stdout: str = Field(
         description="Standard output.",

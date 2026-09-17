@@ -1,5 +1,4 @@
 from functools import cache
-from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -24,16 +23,16 @@ class Settings(BaseSettings):
     rate_limit_burst: int
 
     sandbox_image: str
-    sandbox_runtime: Literal["runsc", "runc"] = "runsc"
-    sandbox_max_memory: str
-    sandbox_max_cpus: float
+    # MiB
+    sandbox_max_memory: int
+    sandbox_max_cpus: int
     # seconds; the code run
     sandbox_exec_timeout: float
-    # seconds; whole container lifetime
-    sandbox_session_timeout: float
-    # bytes
+    # seconds; lifetime of each microVM
+    sandbox_max_duration: float
+    # bytes; per file, and for what a run prints
     sandbox_max_file_size: int
-    # characters, per stream
+    # characters returned per stream
     sandbox_max_output: int
     # per call, for input_files and output_files each
     sandbox_max_files: int

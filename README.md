@@ -7,32 +7,50 @@
 
 > Disposable, stateless Python sandboxes for OpenWebUI via MCP.
 
-Runs each script in a fresh container, accepts OpenWebUI attachments and returns
-produced files as download links. Built on [llm-sandbox](https://github.com/vndee/llm-sandbox).
+Runs each script in a fresh microVM, accepts OpenWebUI attachments and returns
+produced files as download links. Built on [microsandbox](https://github.com/superradcompany/microsandbox).
 
 ## 🚀 Setup
 
-Requires **Docker** with a running daemon, and [uv](https://docs.astral.sh/uv/).
-Install and register [gVisor](https://gvisor.dev/docs/user_guide/quick_start/docker/)
-as `runsc` on the **Docker daemon host**. `SANDBOX_RUNTIME` accepts only `runsc`
-(default) or `runc` (ordinary Docker). A missing runtime fails the call; there is
-no automatic fallback.
+Requires a Linux host with **KVM** and [uv](https://docs.astral.sh/uv/). The
+server's user must be able to read and write `/dev/kvm`; `uv run msb doctor`
+checks that.
+
+Turn nested virtualization off on the host (`kvm_amd` on AMD). With it on,
+scripts get a working `/dev/kvm` inside their microVM and reach the host's
+nested-virtualization code:
 
 ```bash
-uv sync
-cp .env.example .env
-docker build -f sandbox.Dockerfile -t owui-codebox-sandbox .
+echo "options kvm_intel nested=0" | sudo tee /etc/modprobe.d/kvm-nested.conf
+sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
 ```
 
-Edit `.env`:
+1. Install and configure:
 
-- `JWT_SECRET`: OpenWebUI's `WEBUI_SECRET_KEY`.
-- `OWUI_BASE_URL`: OpenWebUI URL reachable from this server.
-- `OWUI_VERIFY_TLS`: keep `true`; use `false` only if required for self-signed certificates.
+   ```bash
+   uv sync
+   cp .env.example .env
+   ```
 
-Then start with `uv run python main.py` and connect OpenWebUI to
-`http://<host>:8000/mcp`. Requests need a signed JWT with the user in the `id`
-claim. Use a TLS reverse proxy outside a trusted network.
+   - `JWT_SECRET`: OpenWebUI's `WEBUI_SECRET_KEY`.
+   - `OWUI_BASE_URL`: OpenWebUI URL reachable from this server.
+   - `OWUI_VERIFY_TLS`: keep `true`; use `false` only if required for self-signed certificates.
+
+2. Pull the sandbox image. A missing image is pulled by the first tool call,
+   which can outlast the client's tool timeout:
+
+   ```bash
+   uv run msb pull ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest
+   ```
+
+3. Start the server and connect OpenWebUI to `http://<host>:8000/mcp`:
+
+   ```bash
+   uv run python main.py
+   ```
+
+Requests need a signed JWT with the user in the `id` claim. Use a TLS reverse
+proxy outside a trusted network.
 
 ## 🛠️ Tools
 
@@ -52,32 +70,43 @@ claim. Use a TLS reverse proxy outside a trusted network.
 - `input_files`: OpenWebUI file IDs paired with paths under `/sandbox`.
 - `output_files`: files to return from the same call. Everything else is discarded.
 
-## 🐳 Images & deployment
+## 📦 Sandbox image
 
-The sandbox image includes data, plotting, image and Office/PDF libraries plus
-fonts; see [sandbox.Dockerfile](sandbox.Dockerfile) for the package list.
-It is rebuilt monthly with unpinned packages. Build it on the Docker daemon host,
-or set `SANDBOX_IMAGE=ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest`.
+The image includes data, plotting, image and Office/PDF libraries plus fonts;
+see [sandbox.Dockerfile](sandbox.Dockerfile) for the package list. It is rebuilt
+monthly with unpinned packages; `msb pull --force` fetches the update.
 
-A private package index can be baked in at build time:
+`SANDBOX_IMAGE` accepts any OCI reference. Registry credentials, plain-HTTP
+registries and custom CAs go into `~/.microsandbox/config.json`.
+
+A locally built image is loaded into microsandbox's image store and referenced
+as `SANDBOX_IMAGE=owui-codebox-sandbox:latest`. A private package index can be
+baked in at build time:
 
 ```bash
 docker build -f sandbox.Dockerfile \
   --build-arg PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
   --build-arg PIP_TRUSTED_HOST=nexus.example.com \
   -t owui-codebox-sandbox .
+docker save owui-codebox-sandbox | uv run msb load
 ```
 
-To run the MCP server in Docker, build it and start it with the same `.env`:
+## 🐳 Docker
+
+The server runs in a container with the same `.env`. It needs the KVM device,
+and a volume so pulled images survive restarts:
 
 ```bash
 docker build -t owui-codebox-mcp .
 docker run -d -p 8000:8000 \
   --restart unless-stopped \
-  -v /var/run/docker.sock:/var/run/docker.sock \
+  --device /dev/kvm \
+  -v owui-codebox-data:/root/.microsandbox \
   --env-file .env \
   --name owui-codebox-mcp \
   owui-codebox-mcp
+docker exec owui-codebox-mcp uv run --no-sync msb pull \
+  ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest
 ```
 
 A prebuilt image is available as `ghcr.io/th3r3alduk3/owui-codebox-mcp:latest`.
@@ -86,17 +115,24 @@ A prebuilt image is available as `ghcr.io/th3r3alduk3/owui-codebox-mcp:latest`.
 
 [.env.example](.env.example) lists all settings: RAM, CPU, timeouts, file and
 output limits, parallel sandboxes and per-user rate limits.
-Keep `SANDBOX_SESSION_TIMEOUT` above `SANDBOX_EXEC_TIMEOUT`; setup and installs
-count toward the session lifetime.
+Keep `SANDBOX_MAX_DURATION` above `SANDBOX_EXEC_TIMEOUT`; it bounds the
+lifetime of each microVM, including pip installs.
 
-- **Isolation:** gVisor by default, restricted capabilities and resource limits.
-- **Network:** scripts run offline; network disconnection is verified. Package
-  installation is online and uses prebuilt wheels only (`--only-binary=:all:`).
-- **Files:** sizes are checked before any bytes move. Only regular files under
-  `/sandbox` come back; directories, symlinks and paths outside it are rejected.
-  `/sandbox` is an anonymous Docker volume, removed together with the container.
+- **Isolation:** every call boots its own microVM with its own kernel (KVM via
+  libkrun), the restricted in-guest security profile and fixed RAM/vCPU caps.
+- **Network:** scripts run in a microVM whose network policy denies all traffic
+  from boot. `libraries` are installed beforehand by a separate, online microVM
+  from prebuilt wheels only (`--only-binary=:all:`) and handed over through a
+  read-only mount.
+- **Disk:** a microVM can write 4 GiB to its own disk, and `libraries` can take
+  4 GiB in the server's `/var/tmp` (microsandbox defaults). Both are removed
+  after the call.
+- **Files:** transfers are cut off at the size limit, never buffered beyond it.
+  Only regular files under `/sandbox` come back; directories, symlinks and paths
+  outside it are rejected.
 - **Errors:** tool errors never carry exception text, so no URLs, hosts or stack
   traces leak into the chat.
-- **Host access:** the MCP server's Docker socket grants host-level privileges.
-- **Known limits:** no disk quota; stdout/stderr are truncated only after execution,
-  so excessive output can consume server memory.
+- **Output:** stdout/stderr are read as a stream. A run that prints more than
+  `SANDBOX_MAX_FILE_SIZE` bytes is killed; the first `SANDBOX_MAX_OUTPUT`
+  characters of each stream are returned.
+- **Host access:** the server needs `/dev/kvm` only.

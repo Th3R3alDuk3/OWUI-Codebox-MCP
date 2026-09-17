@@ -8,10 +8,7 @@ from tools import TOOLS
 
 settings = get_settings()
 
-INSTRUCTIONS = """
-Runs Python in disposable, isolated containers: every call gets a fresh sandbox
-that is torn down right after, so nothing persists between calls.
-""".strip()
+INSTRUCTIONS = "Runs Python in disposable, isolated microVMs."
 
 mcp = FastMCP(
     name="OWUI-Codebox-MCP",

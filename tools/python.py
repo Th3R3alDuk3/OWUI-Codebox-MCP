@@ -1,17 +1,16 @@
-from asyncio import Lock, to_thread
-from json import loads
+from asyncio import Lock, timeout
+from contextlib import nullcontext
 from mimetypes import guess_type
 from pathlib import Path
-from shlex import quote
+from tempfile import TemporaryDirectory
 
 from fastmcp.dependencies import CurrentAccessToken, TokenClaim
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from fastmcp.tools import tool
-from llm_sandbox import ConsoleOutput
-from llm_sandbox.exceptions import SandboxTimeoutError
+from microsandbox import ExecEventType
 from packaging.requirements import InvalidRequirement, Requirement
-from pydantic import Field
+from pydantic import Field, TypeAdapter
 from rich.text import Text
 
 from config import get_settings
@@ -23,13 +22,13 @@ from models.sandbox import (
     PackageListing,
 )
 from services.owui import download_file, upload_file
-from tools._sandbox import (
+from tools._python.sandbox import (
     WORKDIR,
-    copy_into,
-    copy_out,
-    isolate_network,
-    open_sandbox,
+    boot_sandbox,
+    read_file,
+    server_slot,
     user_slot,
+    write_file,
 )
 
 _settings = get_settings()
@@ -58,13 +57,10 @@ async def list_python_packages() -> PackageListing:
         if _packages_cache is None:
 
             try:
-                async with open_sandbox(
-                    _settings.sandbox_image,
-                    skip_environment_setup=True,
-                ) as sandbox:
-                    output = await to_thread(
-                        sandbox.execute_commands,
-                        ["pip list --format=json --disable-pip-version-check"],
+                async with server_slot(), boot_sandbox() as sandbox:
+                    output = await sandbox.exec(
+                        "pip",
+                        ["list", "--format=json", "--disable-pip-version-check"],
                     )
             except ToolError:
                 raise
@@ -75,11 +71,13 @@ async def list_python_packages() -> PackageListing:
                 ) from error
 
             if output.exit_code != 0:
+                details = output.stderr_bytes or output.stdout_bytes
                 raise ToolError(
-                    f"Could not list packages: {output.stderr or output.stdout}")
+                    f"Could not list packages: {details.decode(errors='replace')}")
 
             try:
-                entries = loads(output.stdout.strip())
+                packages = TypeAdapter(list[InstalledPackage]).validate_json(
+                    output.stdout_bytes)
             except ValueError as error:
                 raise ToolError(
                     "Unexpected output from pip list."
@@ -87,33 +85,32 @@ async def list_python_packages() -> PackageListing:
 
             _packages_cache = PackageListing(
                 image=_settings.sandbox_image,
-                packages=[
-                    InstalledPackage(name=entry["name"], version=entry["version"])
-                    for entry in entries
-                ],
+                packages=packages,
             )
 
     return _packages_cache
 
 
 def _clip(
-    stream: str,
+    stream: bytearray,
 ) -> str:
 
-    plain = Text.from_ansi(stream).plain
     limit = _settings.sandbox_max_output
+    # UTF-8 needs at most 4 bytes per character; the rest is never decoded.
+    head = stream[:4 * limit]
+    plain = Text.from_ansi(head.decode(errors="replace")).plain
 
-    if len(plain) <= limit:
+    if len(head) == len(stream) and len(plain) <= limit:
         return plain
 
-    return f"{plain[:limit]}\n[truncated: {len(plain):,} of {limit:,} characters]"
+    return f"{plain[:limit]}\n[truncated: output exceeds {limit:,} characters]"
 
 
 @tool(
     name="run_python",
     tags={"python", "execute"},
     description=(
-        "Execute self-contained Python in a fresh container and return stdout, "
+        "Execute self-contained Python in a fresh microVM and return stdout, "
         "stderr and the exit code. Nothing persists between calls; the working "
         f"directory is '{WORKDIR}'. Runs are killed after "
         f"{_settings.sandbox_exec_timeout:.0f}s and output is truncated past "
@@ -171,154 +168,175 @@ async def run_python(
         if requirement.url is not None:
             raise ToolError("Library URLs are not supported; use package names.")
 
-    async with (
-        user_slot(user_id),
-        open_sandbox(
-            _settings.sandbox_image,
-            # The venv exists only for pip installs and costs ~4s per call.
-            skip_environment_setup=not libraries,
-            offline=not libraries,
-        ) as sandbox,
-    ):
+    async with user_slot(user_id), server_slot():
 
-        for input_file in input_files:
+        # `pip install --user` target for both VMs; on disk, /tmp is often RAM.
+        with (
+            TemporaryDirectory(dir="/var/tmp", ignore_cleanup_errors=True)
+            if libraries else nullcontext()
+        ) as host_libs_dir:
 
-            try:
-                data = await download_file(
-                    file_id=input_file.id,
-                    token=token.token,
-                    max_bytes=_settings.sandbox_max_file_size,
-                )
-            except RuntimeError as error:
-                raise ToolError(
-                    f"Could not fetch input file '{input_file.id}' "
-                    "from OpenWebUI. Check that the ID belongs to a file "
-                    "the user actually attached."
-                ) from error
+            if libraries:
 
-            if len(data) > _settings.sandbox_max_file_size:
-                raise ToolError(
-                    f"Input file too large ({len(data):,} bytes). "
-                    f"Limit is {_settings.sandbox_max_file_size:,} bytes."
-                )
+                async with boot_sandbox(
+                    online=True,
+                    host_libs_dir=host_libs_dir,
+                ) as installer:
 
-            try:
-                await to_thread(copy_into, sandbox, input_file.path, data)
-            except Exception as error:
-                raise ToolError(
-                    f"Could not copy '{input_file.path}' into the sandbox. "
-                    f"The path must be a file under {WORKDIR}."
-                ) from error
+                    try:
+                        installed = await installer.exec(
+                            "pip",
+                            [
+                                "install", "--user", "--only-binary=:all:",
+                                "--", *libraries,
+                            ],
+                        )
+                    except Exception as error:
+                        raise ToolError(
+                            "Could not run pip in the sandbox."
+                        ) from error
 
-        if libraries:
+                if installed.exit_code != 0:
+                    raise ToolError(
+                        "Could not install the requested libraries. "
+                        "Check the package names and versions. Each package and "
+                        "its dependencies must have a compatible prebuilt wheel "
+                        "for the sandbox's Python version and platform; source "
+                        "builds are disabled."
+                    )
 
-            # sandbox.install() swallows pip failures, so pip runs directly.
-            try:
-                installed = await to_thread(
-                    sandbox.execute_commands,
-                    [
-                        f"{sandbox.pip_executable_path} install --only-binary=:all: -- "
-                        + " ".join(quote(library) for library in libraries)
-                    ],
-                    WORKDIR,
-                )
-            except Exception as error:
-                raise ToolError(
-                    "Could not run pip in the sandbox."
-                ) from error
+            async with boot_sandbox(host_libs_dir=host_libs_dir) as sandbox:
 
-            if installed.exit_code != 0:
-                raise ToolError(
-                    "Could not install the requested libraries. "
-                    "Check the package names and versions. Each package and its "
-                    "dependencies must have a compatible prebuilt wheel for the "
-                    "sandbox's Python version and platform; source builds are disabled."
-                )
+                for input_file in input_files:
 
-            try:
-                await to_thread(isolate_network, sandbox)
-            except Exception as error:
-                raise ToolError(
-                    "Could not cut the sandbox off the network; "
-                    "refusing to run the code."
-                ) from error
+                    try:
+                        data = await download_file(
+                            file_id=input_file.id,
+                            token=token.token,
+                            max_bytes=_settings.sandbox_max_file_size,
+                        )
+                    except RuntimeError as error:
+                        raise ToolError(
+                            f"Could not fetch input file '{input_file.id}' "
+                            "from OpenWebUI. Check that the ID belongs to a file "
+                            "the user actually attached."
+                        ) from error
 
-        try:
-            output: ConsoleOutput = await to_thread(sandbox.run, code)
-        except SandboxTimeoutError as error:
-            raise ToolError(
-                f"Execution timed out after "
-                f"{_settings.sandbox_exec_timeout:.0f}s. "
-                "Each call runs in a fresh container with no state carried "
-                "over, so splitting across calls does not help — make the code "
-                "faster or do less work so it finishes within the limit."
-            ) from error
-        except Exception as error:
-            raise ToolError(
-                "Sandbox execution failed unexpectedly."
-            ) from error
+                    if len(data) > _settings.sandbox_max_file_size:
+                        raise ToolError(
+                            f"Input file too large ({len(data):,} bytes). "
+                            f"Limit is {_settings.sandbox_max_file_size:,} bytes."
+                        )
 
-        # Timeout and OOM kill with exit 137, no output, no exception.
-        if output.exit_code == 137:
-            raise ToolError(
-                "The run was killed by a resource limit — either the "
-                f"{_settings.sandbox_exec_timeout:.0f}s execution timeout "
-                f"or the {_settings.sandbox_max_memory} memory cap. "
-                "Make the code faster or use less memory."
-            )
+                    try:
+                        await write_file(sandbox, input_file.path, data)
+                    except Exception as error:
+                        raise ToolError(
+                            f"Could not copy '{input_file.path}' into the sandbox. "
+                            f"The path must be a file under {WORKDIR}."
+                        ) from error
 
-        uploaded_files: list[OutputFile] = []
+                # In the workdir for sibling imports; the name avoids input files.
+                code_path = f"{WORKDIR}/__main__.py"
 
-        if output.exit_code == 0:
-
-            for output_file_path in output_files:
+                stdout, stderr = bytearray(), bytearray()
+                # Stays -1 when the run is cut short for printing too much.
+                exit_code = -1
 
                 try:
-                    data = await to_thread(
-                        copy_out,
-                        sandbox,
-                        output_file_path,
-                        _settings.sandbox_max_file_size,
-                    )
-                except ValueError as error:
+                    await sandbox.fs.write(code_path, code.encode())
+
+                    # `exec_stream` ignores its own `timeout`.
+                    async with timeout(_settings.sandbox_exec_timeout):
+
+                        # Empty stdin makes `input()` fail at once.
+                        run = await sandbox.exec_stream(
+                            "python",
+                            [code_path],
+                            stdin=b"",
+                        )
+
+                        # The SDK queues unread output without bound, so a
+                        # flood cannot be drained: leaving the VM kills it.
+                        async for event in run:
+
+                            if event.event_type == ExecEventType.STDOUT:
+                                stdout += event.data or b""
+                            elif event.event_type == ExecEventType.STDERR:
+                                stderr += event.data or b""
+                            elif event.code is not None:
+                                exit_code = event.code
+
+                            printed = len(stdout) + len(stderr)
+
+                            if printed > _settings.sandbox_max_file_size:
+                                break
+
+                except TimeoutError as error:
                     raise ToolError(
-                        f"'{output_file_path}' cannot be returned. It must be "
-                        f"a regular file under {WORKDIR}, at most "
-                        f"{_settings.sandbox_max_file_size:,} bytes."
+                        f"Execution timed out after "
+                        f"{_settings.sandbox_exec_timeout:.0f}s. "
+                        "Each call runs in a fresh microVM with no state carried "
+                        "over, so splitting across calls does not help — make the code "
+                        "faster or do less work so it finishes within the limit."
                     ) from error
                 except Exception as error:
                     raise ToolError(
-                        f"Could not read '{output_file_path}' from the sandbox. "
-                        "Check that the code actually wrote the file to that path."
+                        "Sandbox execution failed unexpectedly."
                     ) from error
 
-                file_name = Path(output_file_path).name
+                uploaded_files: list[OutputFile] = []
 
-                try:
-                    download_url = await upload_file(
-                        file_name=file_name,
-                        data=data,
-                        content_type=(
-                            guess_type(file_name)[0]
-                            or "application/octet-stream"
-                        ),
-                        token=token.token,
-                    )
-                except RuntimeError as error:
-                    raise ToolError(
-                        f"Could not upload output file '{file_name}' "
-                        "to OpenWebUI."
-                    ) from error
+                if exit_code == 0:
 
-                uploaded_files.append(OutputFile(
-                    name=file_name,
-                    size=len(data),
-                    download_url=download_url,
-                ))
+                    for output_file_path in output_files:
+
+                        try:
+                            data = await read_file(
+                                sandbox,
+                                output_file_path,
+                                _settings.sandbox_max_file_size,
+                            )
+                        except ValueError as error:
+                            raise ToolError(
+                                f"'{output_file_path}' cannot be returned. It must be "
+                                f"a regular file under {WORKDIR}, at most "
+                                f"{_settings.sandbox_max_file_size:,} bytes."
+                            ) from error
+                        except Exception as error:
+                            raise ToolError(
+                                f"Could not read '{output_file_path}' from the "
+                                "sandbox. Check that the code actually wrote the "
+                                "file to that path."
+                            ) from error
+
+                        file_name = Path(output_file_path).name
+
+                        try:
+                            download_url = await upload_file(
+                                file_name=file_name,
+                                data=data,
+                                content_type=(
+                                    guess_type(file_name)[0]
+                                    or "application/octet-stream"
+                                ),
+                                token=token.token,
+                            )
+                        except RuntimeError as error:
+                            raise ToolError(
+                                f"Could not upload output file '{file_name}' "
+                                "to OpenWebUI."
+                            ) from error
+
+                        uploaded_files.append(OutputFile(
+                            name=file_name,
+                            size=len(data),
+                            download_url=download_url,
+                        ))
 
     return ExecResult(
-        exit_code=output.exit_code,
-        stdout=_clip(output.stdout),
-        stderr=_clip(output.stderr),
+        exit_code=exit_code,
+        stdout=_clip(stdout),
+        stderr=_clip(stderr),
         output_files=uploaded_files,
     )

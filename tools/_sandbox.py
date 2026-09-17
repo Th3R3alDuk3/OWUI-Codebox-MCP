@@ -3,6 +3,7 @@ from collections import Counter
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from posixpath import join, normpath
 from shlex import quote
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
@@ -85,6 +86,10 @@ def _open_sandbox(
         # Explicit selection: Docker must fail if the runtime is unavailable.
         "runtime": _settings.sandbox_runtime,
         "name": f"sandbox-{uuid4().hex[:8]}",
+        # docker cp cannot reach gVisor's rootfs overlay, so /sandbox is a
+        # volume; auto_remove drops it together with the container.
+        "volumes": [WORKDIR],
+        "auto_remove": True,
         # The keep-alive ignores SIGTERM; SIGKILL skips Docker's 10s grace.
         "stop_signal": "SIGKILL",
         "mem_limit": _settings.sandbox_max_memory,
@@ -150,7 +155,7 @@ def copy_into(
     data: bytes,
 ) -> None:
 
-    sandbox_path = Path(WORKDIR, file_path).as_posix()
+    sandbox_path = normpath(join(WORKDIR, file_path))
 
     if not sandbox_path.startswith(f"{WORKDIR}/"):
         raise ValueError("path outside the sandbox workdir")
@@ -169,7 +174,7 @@ def copy_out(
     max_size: int,
 ) -> bytes:
 
-    sandbox_path = Path(WORKDIR, file_path).as_posix()
+    sandbox_path = normpath(join(WORKDIR, file_path))
 
     if not sandbox_path.startswith(f"{WORKDIR}/"):
         raise ValueError("path outside the sandbox workdir")
@@ -191,6 +196,10 @@ def copy_out(
 
     if not size.isdigit() or int(size) > max_size:
         raise ValueError("output file exceeds max_size")
+
+    # llm-sandbox reports a zero-byte file as missing.
+    if size == "0":
+        return b""
 
     with NamedTemporaryFile(delete=True) as tmp_file:
         sandbox.copy_from_runtime(sandbox_path, tmp_file.name)

@@ -2,7 +2,7 @@
 
 [![Docker](https://github.com/Th3R3alDuk3/OWUI-Codebox-MCP/actions/workflows/docker.yml/badge.svg)](https://github.com/Th3R3alDuk3/OWUI-Codebox-MCP/actions/workflows/docker.yml)
 [![Version](https://img.shields.io/github/v/tag/Th3R3alDuk3/OWUI-Codebox-MCP?label=version)](https://github.com/Th3R3alDuk3/OWUI-Codebox-MCP/tags)
-[![Python](https://img.shields.io/badge/python-3.14%2B-blue)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.13%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/github/license/Th3R3alDuk3/OWUI-Codebox-MCP)](LICENSE)
 
 > Disposable, stateless Python sandboxes for OpenWebUI via MCP.
@@ -68,16 +68,19 @@ docker build -f sandbox.Dockerfile \
   -t owui-codebox-sandbox .
 ```
 
-To run the MCP server in Docker using the same `.env`:
+To run the MCP server in Docker, build it and start it with the same `.env`:
 
 ```bash
+docker build -t owui-codebox-mcp .
 docker run -d -p 8000:8000 \
   --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --env-file .env \
   --name owui-codebox-mcp \
-  ghcr.io/th3r3alduk3/owui-codebox-mcp:latest
+  owui-codebox-mcp
 ```
+
+A prebuilt image is available as `ghcr.io/th3r3alduk3/owui-codebox-mcp:latest`.
 
 ## ⚙️ Limits & security
 
@@ -91,6 +94,7 @@ count toward the session lifetime.
   installation is online and uses prebuilt wheels only (`--only-binary=:all:`).
 - **Files:** sizes are checked before any bytes move. Only regular files under
   `/sandbox` come back; directories, symlinks and paths outside it are rejected.
+  `/sandbox` is an anonymous Docker volume, removed together with the container.
 - **Errors:** tool errors never carry exception text, so no URLs, hosts or stack
   traces leak into the chat.
 - **Host access:** the MCP server's Docker socket grants host-level privileges.

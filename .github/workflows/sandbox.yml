@@ -7,7 +7,7 @@ on:
   push:
     branches: [main]
     paths:
-      - sandbox.Dockerfile
+      - docker/Dockerfile.sandbox
       - .github/workflows/sandbox.yml
   workflow_dispatch:
   schedule:
@@ -53,7 +53,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: sandbox.Dockerfile
+          file: docker/Dockerfile.sandbox
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

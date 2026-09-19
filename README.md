@@ -12,9 +12,7 @@ produced files as download links. Built on [microsandbox](https://github.com/sup
 
 ## 🚀 Setup
 
-Requires a Linux host with **KVM** and [uv](https://docs.astral.sh/uv/). The
-server's user must be able to read and write `/dev/kvm`; `uv run msb doctor`
-checks that.
+Requires a Linux host with **KVM** and Docker.
 
 Turn nested virtualization off on the host (`kvm_amd` on AMD). With it on,
 scripts get a working `/dev/kvm` inside their microVM and reach the host's
@@ -25,10 +23,28 @@ echo "options kvm_intel nested=0" | sudo tee /etc/modprobe.d/kvm-nested.conf
 sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
 ```
 
-1. Install and configure:
+1. Build the sandbox image and the server image:
 
    ```bash
-   uv sync
+   docker build -f docker/Dockerfile.sandbox -t owui-codebox-sandbox .
+   docker build -f docker/Dockerfile.app -t owui-codebox-mcp .
+   ```
+
+   The sandbox image includes data, plotting, image and Office/PDF libraries
+   plus fonts; see [Dockerfile.sandbox](docker/Dockerfile.sandbox) for the
+   package list. Packages are unpinned, so a rebuild picks up updates. A
+   private package index can be baked in:
+
+   ```bash
+   docker build -f docker/Dockerfile.sandbox \
+     --build-arg PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
+     --build-arg PIP_TRUSTED_HOST=nexus.example.com \
+     -t owui-codebox-sandbox .
+   ```
+
+2. Configure:
+
+   ```bash
    cp .env.example .env
    ```
 
@@ -36,21 +52,57 @@ sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
    - `OWUI_BASE_URL`: OpenWebUI URL reachable from this server.
    - `OWUI_VERIFY_TLS`: keep `true`; use `false` only if required for self-signed certificates.
 
-2. Pull the sandbox image. A missing image is pulled by the first tool call,
-   which can outlast the client's tool timeout:
+3. Start the server and load the sandbox image into it. The container needs
+   the KVM device and a volume so loaded images survive restarts:
 
    ```bash
-   uv run msb pull ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest
+   docker run -d -p 8000:8000 \
+     --restart unless-stopped \
+     --device /dev/kvm \
+     -v owui-codebox-data:/root/.microsandbox \
+     --env-file .env \
+     --name owui-codebox-mcp \
+     owui-codebox-mcp
+   docker save owui-codebox-sandbox \
+     | docker exec -i owui-codebox-mcp uv run --no-sync msb load
    ```
 
-3. Start the server and connect OpenWebUI to `http://<host>:8000/mcp`:
-
-   ```bash
-   uv run python main.py
-   ```
+4. Connect OpenWebUI to `http://<host>:8000/mcp`.
 
 Requests need a signed JWT with the user in the `id` claim. Use a TLS reverse
 proxy outside a trusted network.
+
+### Without Docker
+
+For testing, the server runs directly with [uv](https://docs.astral.sh/uv/).
+Its user must be able to read and write `/dev/kvm`; `uv run msb doctor` checks
+that. The sandbox image is still built with Docker as above.
+
+```bash
+uv sync
+docker save owui-codebox-sandbox | uv run msb load
+uv run python main.py
+```
+
+### Prebuilt images
+
+CI publishes both images to ghcr.io:
+
+- `ghcr.io/th3r3alduk3/owui-codebox-mcp:latest` replaces the local server build.
+- `ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest` goes into `SANDBOX_IMAGE`.
+  It is rebuilt monthly; `msb pull --force` fetches the update.
+
+The server pulls a missing `SANDBOX_IMAGE` on the first tool call, which can
+outlast the client's tool timeout, so pull it beforehand:
+
+```bash
+docker exec owui-codebox-mcp uv run --no-sync msb pull \
+  ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest
+```
+
+`SANDBOX_IMAGE` accepts any OCI reference. Registry credentials, plain-HTTP
+registries and custom CAs go into `~/.microsandbox/config.json`, which lives
+in the `owui-codebox-data` volume when the server runs in Docker.
 
 ## 🛠️ Tools
 
@@ -69,47 +121,6 @@ proxy outside a trusted network.
 - `libraries`: missing packages by name, optionally with versions/extras; compatible wheels required.
 - `input_files`: OpenWebUI file IDs paired with paths under `/sandbox`.
 - `output_files`: files to return from the same call. Everything else is discarded.
-
-## 📦 Sandbox image
-
-The image includes data, plotting, image and Office/PDF libraries plus fonts;
-see [sandbox.Dockerfile](sandbox.Dockerfile) for the package list. It is rebuilt
-monthly with unpinned packages; `msb pull --force` fetches the update.
-
-`SANDBOX_IMAGE` accepts any OCI reference. Registry credentials, plain-HTTP
-registries and custom CAs go into `~/.microsandbox/config.json`.
-
-A locally built image is loaded into microsandbox's image store and referenced
-as `SANDBOX_IMAGE=owui-codebox-sandbox:latest`. A private package index can be
-baked in at build time:
-
-```bash
-docker build -f sandbox.Dockerfile \
-  --build-arg PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
-  --build-arg PIP_TRUSTED_HOST=nexus.example.com \
-  -t owui-codebox-sandbox .
-docker save owui-codebox-sandbox | uv run msb load
-```
-
-## 🐳 Docker
-
-The server runs in a container with the same `.env`. It needs the KVM device,
-and a volume so pulled images survive restarts:
-
-```bash
-docker build -t owui-codebox-mcp .
-docker run -d -p 8000:8000 \
-  --restart unless-stopped \
-  --device /dev/kvm \
-  -v owui-codebox-data:/root/.microsandbox \
-  --env-file .env \
-  --name owui-codebox-mcp \
-  owui-codebox-mcp
-docker exec owui-codebox-mcp uv run --no-sync msb pull \
-  ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest
-```
-
-A prebuilt image is available as `ghcr.io/th3r3alduk3/owui-codebox-mcp:latest`.
 
 ## ⚙️ Limits & security
 

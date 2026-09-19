@@ -14,3 +14,7 @@ dependencies = [
     "pydantic-settings>=2.15.0",
     "rich>=15.0.0",
 ]
+
+[tool.uv]
+allow-insecure-host = []
+index = [{ url = "https://pypi.org/simple", default = true }]

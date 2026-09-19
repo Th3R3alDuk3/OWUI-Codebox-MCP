@@ -42,6 +42,10 @@ sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
      -t owui-codebox-sandbox .
    ```
 
+   The server image takes its index from the `[tool.uv]` block in
+   [pyproject.toml](pyproject.toml); after changing it, run `uv lock` so
+   `uv.lock` points at the new index before building.
+
 2. Configure:
 
    ```bash

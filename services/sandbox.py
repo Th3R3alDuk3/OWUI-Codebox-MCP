@@ -1,7 +1,6 @@
-from asyncio import Semaphore
-from collections import defaultdict
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
+from os import getpid
 from posixpath import dirname, join, normpath
 from uuid import uuid4
 
@@ -19,40 +18,12 @@ from config import get_settings
 
 _settings = get_settings()
 
-WORKDIR = "/sandbox"
-LIBSDIR = "/libs"
-
-_server_slots = Semaphore(_settings.max_concurrent_sandboxes)
-_user_slots: defaultdict[str, Semaphore] = defaultdict(
-    lambda: Semaphore(_settings.max_concurrent_sandboxes_per_user)
-)
-
-
-@asynccontextmanager
-async def user_slot(
-    user_id: str,
-) -> AsyncGenerator[None]:
-
-    # The acquire fast path never suspends, so this cannot race the acquire.
-    if _user_slots[user_id].locked():
-        raise ToolError(
-            "Concurrent run limit reached "
-            f"({_settings.max_concurrent_sandboxes_per_user} per user). "
-            "Wait for a run to finish and try again."
-        )
-
-    async with _user_slots[user_id]:
-        yield
-
-
-@asynccontextmanager
-async def server_slot() -> AsyncGenerator[None]:
-
-    if _server_slots.locked():
-        raise ToolError("Server at capacity. Try again later.")
-
-    async with _server_slots:
-        yield
+WORK_DIR = "/sandbox"
+LIBS_DIR = "/libs"
+# In the workdir for sibling imports; the name avoids input files.
+CODE_FILE = f"{WORK_DIR}/__main__.py"
+# Names this server's microVMs and libs dirs; a restarted container reuses the PID.
+INSTANCE = f"owui-codebox-{getpid()}"
 
 
 @asynccontextmanager
@@ -61,7 +32,7 @@ async def boot_sandbox(
     host_libs_dir: str | None = None,
 ) -> AsyncGenerator[Sandbox]:
 
-    name = f"sandbox-{uuid4().hex[:8]}"
+    name = f"{INSTANCE}-{uuid4().hex[:8]}"
 
     # A running microVM cannot change its network, so installs get their own VM.
     network = Network.none()
@@ -75,7 +46,7 @@ async def boot_sandbox(
         )
 
     if host_libs_dir:
-        volumes[LIBSDIR] = Volume.bind(host_libs_dir, readonly=not online)
+        volumes[LIBS_DIR] = Volume.bind(host_libs_dir, readonly=not online)
 
     try:
         sandbox = await Sandbox.create(
@@ -83,12 +54,12 @@ async def boot_sandbox(
             image=_settings.sandbox_image,
             memory=_settings.sandbox_max_memory,
             cpus=_settings.sandbox_max_cpus,
-            workdir=WORKDIR,
+            workdir=WORK_DIR,
             security=SecurityProfile.RESTRICTED,
             max_duration=_settings.sandbox_max_duration,
             ephemeral=True,
             # pip and Python pick up `pip install --user` packages from here.
-            env={"PYTHONUSERBASE": LIBSDIR},
+            env={"PYTHONUSERBASE": LIBS_DIR},
             volumes=volumes,
             network=network,
         )
@@ -110,10 +81,11 @@ async def write_file(
     data: bytes,
 ) -> None:
 
-    sandbox_path = normpath(join(WORKDIR, file_path))
+    sandbox_path = normpath(join(WORK_DIR, file_path))
 
-    if not sandbox_path.startswith(f"{WORKDIR}/"):
-        raise ValueError("path outside the sandbox workdir")
+    if not sandbox_path.startswith(f"{WORK_DIR}/") \
+        or sandbox_path == CODE_FILE:
+        raise ValueError("path outside the sandbox workdir or the code file")
 
     # `fs.write` does not create missing parents; `fs.mkdir` does.
     await sandbox.fs.mkdir(dirname(sandbox_path))
@@ -126,9 +98,9 @@ async def read_file(
     max_size: int,
 ) -> bytes:
 
-    sandbox_path = normpath(join(WORKDIR, file_path))
+    sandbox_path = normpath(join(WORK_DIR, file_path))
 
-    if not sandbox_path.startswith(f"{WORKDIR}/"):
+    if not sandbox_path.startswith(f"{WORK_DIR}/"):
         raise ValueError("path outside the sandbox workdir")
 
     # Follows symlinks. Reading a FIFO would block forever.

@@ -1,6 +1,34 @@
 from pydantic import BaseModel, Field
 
 
+class InstalledPackage(BaseModel):
+    name: str = Field(
+        description="Package name as used with pip.",
+    )
+    version: str = Field(
+        description="Installed version.",
+    )
+
+
+class PackageListing(BaseModel):
+    image: str = Field(
+        description="Sandbox image the listing was taken from.",
+    )
+    packages: list[InstalledPackage] = Field(
+        description="Python packages preinstalled in the sandbox image.",
+    )
+
+
+class Edit(BaseModel):
+    old: str = Field(
+        min_length=1,
+        description="Text to replace; must occur exactly once in the code.",
+    )
+    new: str = Field(
+        description="Replacement text; empty removes `old`.",
+    )
+
+
 class InputFile(BaseModel):
     id: str = Field(
         description="OpenWebUI ID of a file the user attached.",
@@ -44,21 +72,6 @@ class ExecResult(BaseModel):
             "and the run succeeded."
         ),
     )
-
-
-class InstalledPackage(BaseModel):
-    name: str = Field(
-        description="Package name as used with pip.",
-    )
-    version: str = Field(
-        description="Installed version.",
-    )
-
-
-class PackageListing(BaseModel):
-    image: str = Field(
-        description="Sandbox image the listing was taken from.",
-    )
-    packages: list[InstalledPackage] = Field(
-        description="Python packages preinstalled in the sandbox image.",
+    session_id: str = Field(
+        description="Pass to the next call to continue in this microVM.",
     )

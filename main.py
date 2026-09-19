@@ -4,11 +4,12 @@ from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 
 from config import get_settings
+from services.session import session_lifespan
 from tools import TOOLS
 
 settings = get_settings()
 
-INSTRUCTIONS = "Runs Python in disposable, isolated microVMs."
+INSTRUCTIONS = "Runs Python in isolated microVMs."
 
 mcp = FastMCP(
     name="OWUI-Codebox-MCP",
@@ -28,6 +29,7 @@ mcp = FastMCP(
             ),
         ),
     ],
+    lifespan=session_lifespan,
     tools=TOOLS,
     mask_error_details=True,
 )

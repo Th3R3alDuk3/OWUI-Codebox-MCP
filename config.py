@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     sandbox_max_cpus: int
     # seconds; the code run
     sandbox_exec_timeout: float
+    # seconds; how long a session waits for the next call
+    sandbox_idle_timeout: float
     # seconds; lifetime of each microVM
     sandbox_max_duration: float
     # bytes; per file, and for what a run prints

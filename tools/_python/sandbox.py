@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from fastmcp.exceptions import ToolError
 from microsandbox import (
+    FsEntryKind,
     Network,
     NetworkProfile,
     Sandbox,
@@ -130,14 +131,10 @@ async def read_file(
     if not sandbox_path.startswith(f"{WORKDIR}/"):
         raise ValueError("path outside the sandbox workdir")
 
-    # `fs.stat` follows symlinks, coreutils `stat` does not.
-    probe = await sandbox.exec("stat", ["-c", "%F", "--", sandbox_path])
+    # Follows symlinks. Reading a FIFO would block forever.
+    metadata = await sandbox.fs.stat(sandbox_path)
 
-    if probe.exit_code != 0:
-        raise FileNotFoundError(sandbox_path)
-
-    # Also matches "regular empty file".
-    if not probe.stdout_text.startswith("regular"):
+    if metadata.kind != FsEntryKind.FILE:
         raise ValueError("not a regular file")
 
     data = bytearray()

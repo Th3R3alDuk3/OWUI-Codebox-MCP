@@ -97,13 +97,13 @@ def _clip(
 
     limit = _settings.sandbox_max_output
     # UTF-8 needs at most 4 bytes per character; the rest is never decoded.
-    head = stream[:4 * limit]
-    plain = Text.from_ansi(head.decode(errors="replace")).plain
+    tail = stream[-4 * limit:]
+    plain = Text.from_ansi(tail.decode(errors="replace")).plain
 
-    if len(head) == len(stream) and len(plain) <= limit:
+    if len(tail) == len(stream) and len(plain) <= limit:
         return plain
 
-    return f"{plain[:limit]}\n[truncated: output exceeds {limit:,} characters]"
+    return f"[truncated: output exceeds {limit:,} characters]\n{plain[-limit:]}"
 
 
 @tool(
@@ -113,9 +113,9 @@ def _clip(
         "Execute self-contained Python in a fresh microVM and return stdout, "
         "stderr and the exit code. Nothing persists between calls; the working "
         f"directory is '{WORKDIR}'. Runs are killed after "
-        f"{_settings.sandbox_exec_timeout:.0f}s and output is truncated past "
-        f"{_settings.sandbox_max_output:,} characters, so print summaries, not "
-        "whole datasets.\n\n"
+        f"{_settings.sandbox_exec_timeout:.0f}s and only the last "
+        f"{_settings.sandbox_max_output:,} characters of output are returned, "
+        "so print summaries, not whole datasets.\n\n"
         "The sandbox is offline while the code runs: get packages via "
         "`libraries` and data via `input_files`, never by downloading in the "
         "code. Files the code writes are lost unless listed in `output_files` "

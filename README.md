@@ -32,19 +32,7 @@ sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
 
    The sandbox image includes data, plotting, image and Office/PDF libraries
    plus fonts; see [Dockerfile.sandbox](docker/Dockerfile.sandbox) for the
-   package list. Packages are unpinned, so a rebuild picks up updates. A
-   private package index can be baked in:
-
-   ```bash
-   docker build -f docker/Dockerfile.sandbox \
-     --build-arg PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
-     --build-arg PIP_TRUSTED_HOST=nexus.example.com \
-     -t owui-codebox-sandbox .
-   ```
-
-   The server image takes its index from the `[tool.uv]` block in
-   [pyproject.toml](pyproject.toml); after changing it, run `uv lock` so
-   `uv.lock` points at the new index before building.
+   package list. Packages are unpinned, so a rebuild picks up updates.
 
 2. Configure:
 
@@ -87,6 +75,25 @@ uv sync
 docker save owui-codebox-sandbox | uv run msb load
 uv run python main.py
 ```
+
+### Private package index
+
+Both images can be built against a private index such as Nexus. The sandbox
+image takes it as build arguments:
+
+```bash
+docker build -f docker/Dockerfile.sandbox \
+  --build-arg PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
+  --build-arg PIP_TRUSTED_HOST=nexus.example.com \
+  -t owui-codebox-sandbox .
+```
+
+The server image takes it from the `[tool.uv]` block in
+[pyproject.toml](pyproject.toml): set `index` to the private index and, for
+plain HTTP, add its host to `allow-insecure-host`. `uv lock` then keeps the
+locked versions and rewrites their URLs in `uv.lock`, and the build installs
+from there. Both files then differ from the repository; keep those changes
+local. The `FROM` images of both Dockerfiles must be reachable as well.
 
 ### Prebuilt images
 
@@ -143,11 +150,11 @@ lifetime of each microVM, including pip installs.
   4 GiB in the server's `/var/tmp` (microsandbox defaults). Both are removed
   after the call.
 - **Files:** transfers are cut off at the size limit, never buffered beyond it.
-  Only regular files under `/sandbox` come back; directories, symlinks and paths
-  outside it are rejected.
+  Only regular files under `/sandbox` come back; directories and paths outside
+  it are rejected.
 - **Errors:** tool errors never carry exception text, so no URLs, hosts or stack
   traces leak into the chat.
 - **Output:** stdout/stderr are read as a stream. A run that prints more than
-  `SANDBOX_MAX_FILE_SIZE` bytes is killed; the first `SANDBOX_MAX_OUTPUT`
+  `SANDBOX_MAX_FILE_SIZE` bytes is killed; the last `SANDBOX_MAX_OUTPUT`
   characters of each stream are returned.
 - **Host access:** the server needs `/dev/kvm` only.

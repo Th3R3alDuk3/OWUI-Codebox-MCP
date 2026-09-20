@@ -24,8 +24,8 @@ class Settings(BaseSettings):
 
     sandbox_image: str
     # MiB
-    sandbox_max_memory: int
-    sandbox_max_cpus: int
+    sandbox_memory: int
+    sandbox_cpus: int
     # seconds; the code run
     sandbox_exec_timeout: float
     # seconds; how long a session waits for the next call
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # per call, for input_files and output_files each
     sandbox_max_files: int
     # per call
-    sandbox_max_libraries: int
+    sandbox_max_packages: int
 
 
 @cache

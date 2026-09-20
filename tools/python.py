@@ -1,47 +1,48 @@
 from asyncio import Lock, timeout
 from mimetypes import guess_type
 from pathlib import Path
+from time import monotonic
 
 from fastmcp.dependencies import CurrentAccessToken, TokenClaim
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
 from fastmcp.tools import tool
+from fastmcp.utilities.logging import get_logger
 from microsandbox import ExecEventType
 from packaging.requirements import InvalidRequirement, Requirement
 from pydantic import Field, TypeAdapter
 from rich.text import Text
 
 from config import get_settings
-from models.sandbox import (
+from models.python import (
     Edit,
-    ExecResult,
     InputFile,
     InstalledPackage,
     OutputFile,
-    PackageListing,
+    RunResult,
 )
 from services.owui import download_file, upload_file
 from services.sandbox import CODE_FILE, WORK_DIR, boot_sandbox, read_file, write_file
 from services.session import open_session, server_slot, use_session
 
 _settings = get_settings()
+logger = get_logger(__name__)
 
 
 # The image is fixed for the process lifetime, so one listing serves all calls.
 _packages_lock = Lock()
-_packages_cache: PackageListing | None = None
+_packages_cache: list[InstalledPackage] | None = None
 
 
 @tool(
     name="list_python_packages",
-    tags={"python", "packages"},
     description=(
-        "List the packages preinstalled in the sandbox image. Call this before "
-        "using run_python's `libraries`: preinstalled packages resolve "
-        "instantly, anything else is downloaded at call time."
+        "List the packages preinstalled in the sandbox image. Check it before "
+        "requesting `packages` in run_python; only missing ones need "
+        "installing."
     ),
 )
-async def list_python_packages() -> PackageListing:
+async def list_python_packages() -> list[InstalledPackage]:
 
     global _packages_cache
 
@@ -50,23 +51,13 @@ async def list_python_packages() -> PackageListing:
         if _packages_cache is None:
 
             async with server_slot(), boot_sandbox() as sandbox:
-                output = await sandbox.exec(
-                    "pip",
-                    ["list", "--format=json", "--disable-pip-version-check"],
-                )
+                output = await sandbox.exec("pip", [
+                    "list", "--format=json", "--disable-pip-version-check"
+                ])
 
-            try:
-                packages = TypeAdapter(list[InstalledPackage]).validate_json(
-                    output.stdout_bytes)
-            except ValueError as error:
-                raise ToolError(
-                    "Unexpected output from pip list."
-                ) from error
-
-            _packages_cache = PackageListing(
-                image=_settings.sandbox_image,
-                packages=packages,
-            )
+            _packages_cache = TypeAdapter(
+                list[InstalledPackage]
+            ).validate_json(output.stdout_bytes)
 
     return _packages_cache
 
@@ -88,14 +79,13 @@ def _clip(
 
 @tool(
     name="run_python",
-    tags={"python", "execute"},
     description=(
         "Run Python in an isolated microVM and return stdout, stderr and the "
         f"exit code. The working directory is '{WORK_DIR}'. Runs are killed "
         f"after {_settings.sandbox_exec_timeout:.0f}s and only the last "
-        f"{_settings.sandbox_max_output:,} characters of output are returned, "
+        f"{_settings.sandbox_max_output:,} characters of each stream are returned, "
         "so print summaries, not whole datasets.\n\n"
-        "The sandbox is offline: get packages via `libraries` and data via "
+        "The sandbox is offline: packages come from `packages` and data from "
         "`input_files`, never by downloading in the code. Files the code "
         "writes come back only when listed in `output_files`.\n\n"
         "Each result carries a `session_id`. Pass it to keep the same microVM "
@@ -116,17 +106,15 @@ async def run_python(
     ),
     edits: list[Edit] = Field(
         default_factory=list,
-        description="Text replacements applied to the session's code before the run.",
+        description="Text replacements applied in order to the session's code before the run.",
     ),
-    libraries: list[str] = Field(
+    packages: list[str] = Field(
         default_factory=list,
-        max_length=_settings.sandbox_max_libraries,
+        max_length=_settings.sandbox_max_packages,
         description=(
-            "Only packages missing from the sandbox image; check "
-            "list_python_packages first. They stay installed for the session. "
-            "Use package names with optional versions or extras. Only "
-            "compatible prebuilt wheels are accepted; source builds, URLs, "
-            "local paths and pip options are not supported."
+            "Packages missing from the sandbox image (see list_python_packages) "
+            "as pip requirements with optional version or extras; prebuilt "
+            "wheels only. They stay installed for the session."
         ),
     ),
     input_files: list[InputFile] = Field(
@@ -147,32 +135,29 @@ async def run_python(
     ),
     token: AccessToken = CurrentAccessToken(),
     user_id: str = TokenClaim("id"),
-) -> ExecResult:
+) -> RunResult:
 
     # Explicit source URLs/paths and pip options could bypass wheel-only installs.
-    for library in libraries:
-        try:
-            requirement = Requirement(library)
-        except InvalidRequirement as error:
-            raise ToolError(
-                "Libraries must be package names with optional versions or extras. "
-                "URLs, local paths and pip options are not supported."
-            ) from error
-        if requirement.url is not None:
-            raise ToolError("Library URLs are not supported; use package names.")
+    try:
+        if any(Requirement(package).url for package in packages):
+            raise InvalidRequirement("URL")
+    except InvalidRequirement as error:
+        raise ToolError(
+            "Packages must be pip requirements with optional version or extras. "
+            "URLs, local paths and pip options are not supported.") from error
+
+    if not code and not session_id:
+        raise ToolError("Pass code, or a session_id whose code to rerun or edit.")
 
     if not session_id:
         session_id = await open_session(user_id)
 
     async with use_session(session_id, user_id) as session:
 
-        if not code and not await session.sandbox.fs.exists(CODE_FILE):
-            raise ToolError("Pass code; the session has none yet.")
-
         if code:
             await session.sandbox.fs.write(CODE_FILE, code.encode())
 
-        if libraries:
+        if packages:
 
             async with boot_sandbox(
                 online=True,
@@ -181,12 +166,14 @@ async def run_python(
 
                 installed = await installer.exec("pip", [
                     "install", "--user", "--only-binary=:all:",
-                    "--", *libraries
+                    "--", *packages
                 ])
 
             if installed.exit_code != 0:
+                logger.warning("session %s: pip install failed\n%s",
+                    session_id, installed.stderr_text.strip())
                 raise ToolError(
-                    "Could not install the requested libraries. "
+                    "Could not install the requested packages. "
                     "Check the package names and versions. Each package and "
                     "its dependencies must have a compatible prebuilt wheel "
                     "for the sandbox's Python version and platform; source "
@@ -246,17 +233,15 @@ async def run_python(
         stdout, stderr = bytearray(), bytearray()
         # Stays -1 when the run is cut short for printing too much.
         exit_code = -1
+        started = monotonic()
 
         try:
             # `exec_stream` ignores its own `timeout`.
             async with timeout(_settings.sandbox_exec_timeout):
 
                 # Empty stdin makes `input()` fail at once.
-                run = await session.sandbox.exec_stream(
-                    "python",
-                    [CODE_FILE],
-                    stdin=b"",
-                )
+                run = await session.sandbox.exec_stream("python",
+                    [CODE_FILE], stdin=b"")
 
                 try:
                     # The SDK queues unread output without bound; the kill ends a flood.
@@ -285,6 +270,8 @@ async def run_python(
                 "intermediate results in files."
             ) from error
 
+        logger.info("session %s: exit %d after %.1fs",
+            session_id, exit_code, monotonic() - started)
         uploaded_files: list[OutputFile] = []
 
         if exit_code == 0:
@@ -297,17 +284,11 @@ async def run_python(
                         output_file_path,
                         _settings.sandbox_max_file_size,
                     )
-                except ValueError as error:
-                    raise ToolError(
-                        f"'{output_file_path}' cannot be returned. It must be "
-                        f"a regular file under {WORK_DIR}, at most "
-                        f"{_settings.sandbox_max_file_size:,} bytes."
-                    ) from error
                 except Exception as error:
                     raise ToolError(
-                        f"Could not read '{output_file_path}' from the "
-                        "sandbox. Check that the code actually wrote the "
-                        "file to that path."
+                        f"'{output_file_path}' cannot be returned. It must be "
+                        f"a regular file under {WORK_DIR} that the code wrote, "
+                        f"at most {_settings.sandbox_max_file_size:,} bytes."
                     ) from error
 
                 file_name = Path(output_file_path).name
@@ -334,7 +315,7 @@ async def run_python(
                     download_url=download_url,
                 ))
 
-    return ExecResult(
+    return RunResult(
         exit_code=exit_code,
         stdout=_clip(stdout),
         stderr=_clip(stderr),

@@ -5,6 +5,7 @@ from posixpath import dirname, join, normpath
 from uuid import uuid4
 
 from fastmcp.exceptions import ToolError
+from fastmcp.utilities.logging import get_logger
 from microsandbox import (
     FsEntryKind,
     Network,
@@ -17,6 +18,7 @@ from microsandbox import (
 from config import get_settings
 
 _settings = get_settings()
+logger = get_logger(__name__)
 
 WORK_DIR = "/sandbox"
 LIBS_DIR = "/libs"
@@ -52,8 +54,8 @@ async def boot_sandbox(
         sandbox = await Sandbox.create(
             name,
             image=_settings.sandbox_image,
-            memory=_settings.sandbox_max_memory,
-            cpus=_settings.sandbox_max_cpus,
+            memory=_settings.sandbox_memory,
+            cpus=_settings.sandbox_cpus,
             workdir=WORK_DIR,
             security=SecurityProfile.RESTRICTED,
             max_duration=_settings.sandbox_max_duration,
@@ -64,6 +66,7 @@ async def boot_sandbox(
             network=network,
         )
     except Exception as error:
+        logger.exception("sandbox %s: start failed", name)
         # A failed start leaves a stopped sandbox record behind.
         with suppress(Exception):
             await Sandbox.remove(name)

@@ -141,7 +141,7 @@ A follow-up call in the same session changes only what differs:
 
 - `session_id`: from a previous result; reuses that microVM with its packages and files.
 - `edits`: exact-text replacements applied to the session's code before the run.
-- `libraries`: missing packages by name, optionally with versions/extras; compatible wheels required.
+- `packages`: packages missing from the image, by name with optional versions/extras; compatible wheels required.
 - `input_files`: OpenWebUI file IDs paired with paths under `/sandbox`.
 - `output_files`: files to return from this call.
 
@@ -162,10 +162,10 @@ lifetime of each microVM, so of every session and pip install.
   sandbox slot until they end and give way when a new run needs one. A
   package install briefly adds a second microVM to its session.
 - **Network:** scripts run in a microVM whose network policy denies all traffic
-  from boot. `libraries` are installed by a separate, online microVM
+  from boot. `packages` are installed by a separate, online microVM
   from prebuilt wheels only (`--only-binary=:all:`) and handed over through a
   read-only mount.
-- **Disk:** a microVM can write 4 GiB to its own disk, and `libraries` can take
+- **Disk:** a microVM can write 4 GiB to its own disk, and `packages` can take
   4 GiB in the server's `/var/tmp` (microsandbox defaults). Both are removed
   when the session ends, leftovers of an unclean shutdown at the next start.
 - **Files:** transfers are cut off at the size limit, never buffered beyond it.

@@ -10,15 +10,6 @@ class InstalledPackage(BaseModel):
     )
 
 
-class PackageListing(BaseModel):
-    image: str = Field(
-        description="Sandbox image the listing was taken from.",
-    )
-    packages: list[InstalledPackage] = Field(
-        description="Python packages preinstalled in the sandbox image.",
-    )
-
-
 class Edit(BaseModel):
     old: str = Field(
         min_length=1,
@@ -34,10 +25,7 @@ class InputFile(BaseModel):
         description="OpenWebUI ID of a file the user attached.",
     )
     path: str = Field(
-        description=(
-            "Absolute sandbox path to place the file at "
-            "(e.g. '/sandbox/data.csv')."
-        ),
+        description="Path under /sandbox to place the file at, e.g. '/sandbox/data.csv'.",
     )
 
 
@@ -46,14 +34,14 @@ class OutputFile(BaseModel):
         description="Name of the file returned from the sandbox.",
     )
     size: int = Field(
-        description="Size of the returned file in bytes.",
+        description="Size in bytes.",
     )
     download_url: str = Field(
-        description="Download link — give this URL to the user.",
+        description="Download URL to give to the user.",
     )
 
 
-class ExecResult(BaseModel):
+class RunResult(BaseModel):
     exit_code: int = Field(
         description=(
             "Exit code; 0 means success, -1 means killed "

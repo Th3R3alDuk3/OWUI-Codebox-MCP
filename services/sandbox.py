@@ -1,7 +1,6 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from functools import cache
-from ipaddress import ip_address
 from posixpath import dirname, join, normpath
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -10,7 +9,6 @@ from fastmcp.exceptions import ToolError
 from fastmcp.utilities.logging import get_logger
 from microsandbox import (
     Action,
-    Destination,
     FsEntryKind,
     Network,
     NetworkPolicy,
@@ -34,21 +32,15 @@ CODE_FILE = f"{WORK_DIR}/__main__.py"
 def _network() -> Network:
 
     url = urlsplit(_settings.sandbox_index_url)
-    host = url.hostname or ""
-    port = url.port or (443 if url.scheme == "https" else 80)
-
-    # A domain rule does not match an IP.
-    try:
-        ip_address(host)
-        index = Destination.ip(host)
-    except ValueError:
-        index = Destination.domain(host)
 
     # Deny all but these; rebind protection would block a LAN index.
     return Network(
         policy=NetworkPolicy(default_ingress=Action.DENY, rules=(
-            Rule.allow(destination=Destination.domain("files.pythonhosted.org"), port=443),
-            Rule.allow(destination=index, port=port),
+            Rule.allow(destination="files.pythonhosted.org", port=443),
+            Rule.allow(
+                destination=url.hostname or "",
+                port=url.port or (443 if url.scheme == "https" else 80),
+            ),
         )),
         dns=DnsConfig(rebind_protection=False),
     )

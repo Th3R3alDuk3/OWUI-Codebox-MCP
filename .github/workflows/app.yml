@@ -1,4 +1,4 @@
-name: Docker
+name: App image
 
 # Build on every push to main and on version tags; validate (build only) on PRs.
 on:

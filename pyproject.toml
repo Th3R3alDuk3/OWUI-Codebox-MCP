@@ -9,7 +9,6 @@ dependencies = [
     "fastmcp>=4.0.5",
     "httpx2>=2.13.0",
     "microsandbox>=0.7.2",
-    "packaging>=26.3",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
     "rich>=15.0.0",

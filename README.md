@@ -8,7 +8,8 @@
 > Isolated Python sandboxes for OpenWebUI via MCP.
 
 Runs scripts in microVMs that stay alive for a short session, accepts OpenWebUI
-attachments and returns produced files as download links. Built on [microsandbox](https://github.com/superradcompany/microsandbox).
+attachments and returns produced files as download links. Built on
+[microsandbox](https://github.com/superradcompany/microsandbox).
 
 ## 🚀 Setup
 
@@ -42,7 +43,10 @@ sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
 
    - `JWT_SECRET`: OpenWebUI's `WEBUI_SECRET_KEY`.
    - `OWUI_BASE_URL`: OpenWebUI URL reachable from this server.
-   - `OWUI_VERIFY_TLS`: keep `true`; use `false` only if required for self-signed certificates.
+   - `OWUI_VERIFY_TLS`: keep `true`; use `false` only if required for
+     self-signed certificates.
+   - `SANDBOX_INDEX_URL`: package index the microVMs install from, by
+     default PyPI; see [Package index](#package-index).
 
 3. Start the server and load the sandbox image into it. The container needs
    the KVM device and a volume so loaded images survive restarts:
@@ -76,24 +80,29 @@ docker save owui-codebox-sandbox | uv run msb load
 uv run python main.py
 ```
 
-### Private package index
+### Package index
 
-Both images can be built against a private index such as Nexus. The sandbox
-image takes it as build arguments:
+`packages` are installed from `SANDBOX_INDEX_URL`, by default PyPI. That index
+and PyPI's file host `files.pythonhosted.org` are the only destinations a
+microVM can reach; other names do not even resolve. A proxy index in the LAN
+such as Nexus or devpi fits, by name or by IP address; if it uses an own
+certificate, name it in `SANDBOX_INSECURE_HOST`. Scripts can reach the index as
+well, so it must not accept anonymous uploads.
+
+The sandbox image's preinstalled packages come from the index it is built
+with, by default PyPI as well. Build it against another one with the matching
+build arguments:
 
 ```bash
 docker build -f docker/Dockerfile.sandbox \
-  --build-arg PIP_INDEX_URL=https://nexus.example.com/repository/pypi/simple \
-  --build-arg PIP_TRUSTED_HOST=nexus.example.com \
+  --build-arg UV_DEFAULT_INDEX=https://nexus.example.com/repository/pypi/simple \
+  --build-arg UV_INSECURE_HOST=nexus.example.com \
   -t owui-codebox-sandbox .
 ```
 
-The server image takes it from the `[tool.uv]` block in
-[pyproject.toml](pyproject.toml): set `index` to the private index and, for
-plain HTTP, add its host to `allow-insecure-host`. `uv lock` then keeps the
-locked versions and rewrites their URLs in `uv.lock`, and the build installs
-from there. Both files then differ from the repository; keep those changes
-local. The `FROM` images of both Dockerfiles must be reachable as well.
+The server image can use the same index: set it in the `[tool.uv]` block of
+[pyproject.toml](pyproject.toml) and run `uv lock`; keep those changes local.
+The `FROM` images of both Dockerfiles must be reachable as well.
 
 ### Prebuilt images
 
@@ -139,36 +148,36 @@ A follow-up call in the same session changes only what differs:
 }
 ```
 
-- `session_id`: from a previous result; reuses that microVM with its packages and files.
+- `session_id`: from a previous result; reuses that microVM with its packages
+  and files.
 - `edits`: exact-text replacements applied to the session's code before the run.
-- `packages`: packages missing from the image, by name with optional versions/extras; compatible wheels required.
+- `packages`: packages missing from the image, by name with optional
+  versions/extras; compatible wheels required.
 - `input_files`: OpenWebUI file IDs paired with paths under `/sandbox`.
 - `output_files`: files to return from this call.
 
 A session ends `SANDBOX_IDLE_TIMEOUT` seconds after its last call, or earlier
-when its user starts a new run without `session_id`. Sessions live in the server process and end
-with it.
+when its user starts a new run without `session_id`. Sessions live in the
+server process and end with it.
 
 ## ⚙️ Limits & security
 
 [.env.example](.env.example) lists all settings: RAM, CPU, timeouts, file and
 output limits, parallel sandboxes and per-user rate limits.
 Keep `SANDBOX_MAX_DURATION` above `SANDBOX_EXEC_TIMEOUT`; it bounds the
-lifetime of each microVM, so of every session and pip install.
+lifetime of each microVM, so of every session.
 
 - **Isolation:** every session boots its own microVM with its own kernel (KVM
   via libkrun), the restricted in-guest security profile and fixed RAM/vCPU
   caps. A session belongs to the user who started it. Idle sessions hold a
-  sandbox slot until they end; only their own user's next run replaces them early. A
-  package install briefly adds a second microVM with 1 GiB and one vCPU, so
-  plan for up to `MAX_CONCURRENT_SANDBOXES` × (`SANDBOX_MEMORY` + 1 GiB) of RAM.
-- **Network:** scripts run in a microVM whose network policy denies all traffic
-  from boot. `packages` are installed by a separate, online microVM
-  from prebuilt wheels only (`--only-binary=:all:`) and handed over through a
-  read-only mount.
-- **Disk:** a microVM can write 4 GiB to its own disk, and `packages` can take
-  4 GiB in the server's `/var/tmp` (microsandbox defaults). Both are removed
-  when the session ends, leftovers of an unclean shutdown at the next start.
+  sandbox slot until they end; only their own user's next run replaces them
+  early. Plan for up to `MAX_CONCURRENT_SANDBOXES` × `SANDBOX_MEMORY` of RAM.
+- **Network:** a microVM's policy allows connections to the host and port of
+  `SANDBOX_INDEX_URL` and to `files.pythonhosted.org` and denies everything
+  else from boot, name resolution included. `packages` are installed from there
+  as prebuilt wheels only (`--only-binary=:all:`).
+- **Disk:** a microVM can write 4 GiB to its own disk (microsandbox default),
+  `packages` included; it is removed when the session ends.
 - **Files:** transfers are cut off at the size limit, never buffered beyond it.
   Only regular files under `/sandbox` come back; directories and paths outside
   it are rejected.

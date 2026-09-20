@@ -9,7 +9,6 @@ from fastmcp.server.auth import AccessToken
 from fastmcp.tools import tool
 from fastmcp.utilities.logging import get_logger
 from microsandbox import ExecEventType
-from packaging.requirements import InvalidRequirement, Requirement
 from pydantic import Field, TypeAdapter
 from rich.text import Text
 
@@ -51,8 +50,8 @@ async def list_python_packages() -> list[InstalledPackage]:
         if _packages_cache is None:
 
             async with server_slot(), boot_sandbox() as sandbox:
-                output = await sandbox.exec("pip", [
-                    "list", "--format=json", "--disable-pip-version-check"
+                output = await sandbox.exec("uv", [
+                    "pip", "list", "--format=json"
                 ])
 
             _packages_cache = TypeAdapter(
@@ -85,9 +84,10 @@ def _clip(
         f"after {_settings.sandbox_exec_timeout:.0f}s and only the last "
         f"{_settings.sandbox_max_output:,} characters of each stream are returned, "
         "so print summaries, not whole datasets.\n\n"
-        "The sandbox is offline: packages come from `packages` and data from "
-        "`input_files`, never by downloading in the code. Files the code "
-        "writes come back only when listed in `output_files`.\n\n"
+        "The sandbox reaches only its package index: packages come from "
+        "`packages` and data from `input_files`, never by downloading in the "
+        "code. Files the code writes come back only when listed in "
+        "`output_files`.\n\n"
         "Each result carries a `session_id`. Pass it to keep the same microVM "
         "with its packages and files, and fix the code with `edits` instead "
         "of resending it. A session ends after "
@@ -106,14 +106,17 @@ async def run_python(
     ),
     edits: list[Edit] = Field(
         default_factory=list,
-        description="Text replacements applied in order to the session's code before the run.",
+        description=(
+            "Text replacements applied in order to the session's code before "
+            "the run."
+        ),
     ),
     packages: list[str] = Field(
         default_factory=list,
         max_length=_settings.sandbox_max_packages,
         description=(
             "Packages missing from the sandbox image (see list_python_packages) "
-            "as pip requirements with optional version or extras; prebuilt "
+            "as requirement specifiers with optional version or extras; prebuilt "
             "wheels only. They stay installed for the session."
         ),
     ),
@@ -137,15 +140,6 @@ async def run_python(
     user_id: str = TokenClaim("id"),
 ) -> RunResult:
 
-    # Explicit source URLs/paths and pip options could bypass wheel-only installs.
-    try:
-        if any(Requirement(package).url for package in packages):
-            raise InvalidRequirement("URL")
-    except InvalidRequirement as error:
-        raise ToolError(
-            "Packages must be pip requirements with optional version or extras. "
-            "URLs, local paths and pip options are not supported.") from error
-
     if not code and not session_id:
         raise ToolError("Pass code, or a session_id whose code to rerun or edit.")
 
@@ -159,18 +153,12 @@ async def run_python(
 
         if packages:
 
-            async with boot_sandbox(
-                online=True,
-                host_libs_dir=session.libs_dir,
-            ) as installer:
-
-                installed = await installer.exec("pip", [
-                    "install", "--user", "--only-binary=:all:",
-                    "--", *packages
-                ])
+            installed = await session.sandbox.exec("uv", [
+                "pip", "install", "--only-binary=:all:", "--", *packages
+            ])
 
             if installed.exit_code != 0:
-                logger.warning("session %s: pip install failed\n%s",
+                logger.warning("session %s: package install failed\n%s",
                     session_id, installed.stderr_text.strip())
                 raise ToolError(
                     "Could not install the requested packages. "

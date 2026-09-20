@@ -1,16 +1,11 @@
-FROM python:3.13-trixie
+FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim
 
-ARG PIP_INDEX_URL=https://pypi.org/simple
-ARG PIP_TRUSTED_HOST=
-
-ENV PIP_INDEX_URL=${PIP_INDEX_URL} \
-    PIP_TRUSTED_HOST=${PIP_TRUSTED_HOST}
+ARG UV_DEFAULT_INDEX
+ARG UV_INSECURE_HOST
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_ROOT_USER_ACTION=ignore \
-    MPLBACKEND=Agg
+    UV_SYSTEM_PYTHON=1 \
+    UV_NO_CACHE=1
 
 # Pango/HarfBuzz: WeasyPrint deps. Noto: the base image has no CJK and no emoji.
 RUN apt-get update \
@@ -19,7 +14,7 @@ RUN apt-get update \
         fonts-dejavu fonts-liberation fonts-noto-cjk fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
+RUN uv pip install --compile-bytecode \
     # data & math
     numpy pandas polars pyarrow duckdb scipy sympy statsmodels scikit-learn \
     # plotting
@@ -29,12 +24,12 @@ RUN pip install --no-cache-dir \
     # office / document formats
     openpyxl xlsxwriter xlrd python-docx python-pptx \
     pypdf pdfplumber pymupdf reportlab weasyprint \
-    # parsing only — the sandbox is offline at run time
+    # parsing
     beautifulsoup4 lxml \
     # misc
     pyyaml tabulate markdown jinja2 networkx tqdm rapidfuzz qrcode wordcloud
 
-# Build matplotlib's font cache now so the first plot in a sandbox is fast.
-RUN python -c "import matplotlib.pyplot"
+# Warm matplotlib's font cache; the other imports check the system libraries.
+RUN python -c "import matplotlib.pyplot, weasyprint, cv2, fitz"
 
 WORKDIR /sandbox

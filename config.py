@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     rate_limit_burst: int
 
     sandbox_image: str
+    sandbox_index_url: str
+    # empty unless the index uses an own certificate
+    sandbox_insecure_host: str
     # MiB
     sandbox_memory: int
     sandbox_cpus: int

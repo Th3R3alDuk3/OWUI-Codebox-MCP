@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 class InstalledPackage(BaseModel):
     name: str = Field(
-        description="Package name as used with pip.",
+        description="Package name as used in `packages`.",
     )
     version: str = Field(
         description="Installed version.",

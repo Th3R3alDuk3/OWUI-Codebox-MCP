@@ -3,10 +3,6 @@ from collections import defaultdict
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from os import getpid
-from pathlib import Path
-from shutil import rmtree
-from tempfile import TemporaryDirectory
 from time import monotonic
 from uuid import uuid4
 
@@ -16,7 +12,7 @@ from fastmcp.utilities.logging import get_logger
 from microsandbox import Sandbox
 
 from config import get_settings
-from services.sandbox import INSTANCE, boot_sandbox
+from services.sandbox import boot_sandbox
 
 _settings = get_settings()
 logger = get_logger(__name__)
@@ -26,16 +22,12 @@ logger = get_logger(__name__)
 class Session:
     user_id: str
     sandbox: Sandbox
-    libs_dir: str
-    # Holds the slots, the libs dir and the microVM until closed.
+    # Holds the slots and the microVM until closed.
     stack: AsyncExitStack
     # Held while a call uses the session.
     lock: Lock = field(default_factory=Lock)
     idle_since: float = field(default_factory=monotonic)
 
-
-# `pip install --user` target of each session; /tmp is often RAM.
-_libs_root = Path("/var/tmp", INSTANCE)
 
 _sessions: dict[str, Session] = {}
 
@@ -87,12 +79,9 @@ async def open_session(
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(user_slot(user_id))
         await stack.enter_async_context(server_slot())
-        libs_dir = stack.enter_context(
-            TemporaryDirectory(dir=_libs_root, ignore_cleanup_errors=True))
-        sandbox = await stack.enter_async_context(
-            boot_sandbox(host_libs_dir=libs_dir))
+        sandbox = await stack.enter_async_context(boot_sandbox())
         session_id = uuid4().hex[:8]
-        _sessions[session_id] = Session(user_id, sandbox, libs_dir, stack.pop_all())
+        _sessions[session_id] = Session(user_id, sandbox, stack.pop_all())
 
     logger.info("session %s: opened for user %s", session_id, user_id)
     return session_id
@@ -160,28 +149,10 @@ async def _reap_sessions() -> None:
                 await close_session(session_id)
 
 
-async def _cleanup() -> None:
-
-    # Ctrl-C cancels this task once; the remaining sessions still close.
-    for session_id in list(_sessions):
-        with suppress(CancelledError):
-            await close_session(session_id)
-
-    # Libs dirs of this instance and of dead ones.
-    for path in Path("/var/tmp").glob("owui-codebox-*"):
-        pid = int(path.name.removeprefix("owui-codebox-"))
-        if pid == getpid() or not Path(f"/proc/{pid}").exists():
-            rmtree(path, ignore_errors=True)
-
-
 @asynccontextmanager
 async def session_lifespan(
     server: FastMCP,
 ) -> AsyncGenerator[None]:
-
-    await _cleanup()
-
-    _libs_root.mkdir()
 
     reaper = create_task(_reap_sessions())
 
@@ -191,4 +162,7 @@ async def session_lifespan(
 
         reaper.cancel()
 
-        await _cleanup()
+        # Ctrl-C cancels this once; the remaining sessions still close.
+        for session_id in list(_sessions):
+            with suppress(CancelledError):
+                await close_session(session_id)

@@ -1,8 +1,7 @@
 name: Sandbox image
 
-# The sandbox image changes rarely and is ~2.6 GB, so it is not rebuilt on
-# every push: only when its Dockerfile changes, on demand, and monthly to pick
-# up base image and package security updates (nothing in it is version-pinned).
+# Rebuilt only when its Dockerfile changes, on demand, and monthly for base
+# image and package updates; nothing in it is pinned.
 on:
   push:
     branches: [main]
@@ -22,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write        # required to push to ghcr.io via GITHUB_TOKEN
+      packages: write        # push to ghcr.io
 
     steps:
       - name: Checkout
@@ -47,8 +46,7 @@ jobs:
             type=sha
             type=raw,value=latest
 
-      # No build cache on purpose: this image alone would fill the 10 GB GitHub
-      # Actions cache and evict the server image's layers.
+      # No build cache: its layers would evict the server image's from the 10 GB cache.
       - name: Build and push
         uses: docker/build-push-action@v6
         with:

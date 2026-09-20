@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write        # required to push to ghcr.io via GITHUB_TOKEN
+      packages: write        # push to ghcr.io
 
     steps:
       - name: Checkout
@@ -26,7 +26,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Log in only for real pushes — PRs (incl. from forks) just build.
+      # PRs only build, so no login.
       - name: Log in to ghcr.io
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3

@@ -1,19 +1,24 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
-from os import getpid
+from functools import cache
+from ipaddress import ip_address
 from posixpath import dirname, join, normpath
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastmcp.exceptions import ToolError
 from fastmcp.utilities.logging import get_logger
 from microsandbox import (
+    Action,
+    Destination,
     FsEntryKind,
     Network,
-    NetworkProfile,
+    NetworkPolicy,
+    Rule,
     Sandbox,
     SecurityProfile,
-    Volume,
 )
+from microsandbox.types import DnsConfig
 
 from config import get_settings
 
@@ -21,50 +26,54 @@ _settings = get_settings()
 logger = get_logger(__name__)
 
 WORK_DIR = "/sandbox"
-LIBS_DIR = "/libs"
 # In the workdir for sibling imports; the name avoids input files.
 CODE_FILE = f"{WORK_DIR}/__main__.py"
-# Names this server's microVMs and libs dirs; a restarted container reuses the PID.
-INSTANCE = f"owui-codebox-{getpid()}"
+
+
+@cache
+def _network() -> Network:
+
+    url = urlsplit(_settings.sandbox_index_url)
+    host = url.hostname or ""
+    port = url.port or (443 if url.scheme == "https" else 80)
+
+    # A domain rule does not match an IP.
+    try:
+        ip_address(host)
+        index = Destination.ip(host)
+    except ValueError:
+        index = Destination.domain(host)
+
+    # Deny all but these; rebind protection would block a LAN index.
+    return Network(
+        policy=NetworkPolicy(default_ingress=Action.DENY, rules=(
+            Rule.allow(destination=Destination.domain("files.pythonhosted.org"), port=443),
+            Rule.allow(destination=index, port=port),
+        )),
+        dns=DnsConfig(rebind_protection=False),
+    )
 
 
 @asynccontextmanager
-async def boot_sandbox(
-    online: bool = False,
-    host_libs_dir: str | None = None,
-) -> AsyncGenerator[Sandbox]:
+async def boot_sandbox() -> AsyncGenerator[Sandbox]:
 
-    name = f"{INSTANCE}-{uuid4().hex[:8]}"
-
-    # A running microVM cannot change its network, so installs get their own VM.
-    network = Network.none()
-    volumes = {}
-
-    if online:
-        # PRIVATE also unblocks DNS answers pointing at a LAN package index.
-        network = Network.from_profiles(
-            NetworkProfile.PUBLIC,
-            NetworkProfile.PRIVATE,
-        )
-
-    if host_libs_dir:
-        volumes[LIBS_DIR] = Volume.bind(host_libs_dir, readonly=not online)
+    name = f"owui-codebox-{uuid4().hex[:8]}"
 
     try:
         sandbox = await Sandbox.create(
             name,
             image=_settings.sandbox_image,
-            # pip needs little.
-            memory=1024 if online else _settings.sandbox_memory,
-            cpus=1 if online else _settings.sandbox_cpus,
+            memory=_settings.sandbox_memory,
+            cpus=_settings.sandbox_cpus,
             workdir=WORK_DIR,
             security=SecurityProfile.RESTRICTED,
             max_duration=_settings.sandbox_max_duration,
             ephemeral=True,
-            # pip and Python pick up `pip install --user` packages from here.
-            env={"PYTHONUSERBASE": LIBS_DIR},
-            volumes=volumes,
-            network=network,
+            env={
+                "UV_DEFAULT_INDEX": _settings.sandbox_index_url,
+                "UV_INSECURE_HOST": _settings.sandbox_insecure_host,
+            },
+            network=_network(),
         )
     except Exception as error:
         logger.exception("sandbox %s: start failed", name)

@@ -44,19 +44,6 @@ _user_slots: defaultdict[str, Semaphore] = defaultdict(
 _server_slots = Semaphore(_settings.max_concurrent_sandboxes)
 
 
-async def _close_idle_session(
-    user_id: str | None = None,
-) -> None:
-
-    # The oldest idle session; with a user_id only that user's.
-    for session_id, session in sorted(
-        _sessions.items(), key=lambda item: item[1].idle_since):
-        if (user_id is None or session.user_id == user_id) \
-            and not session.lock.locked():
-            await close_session(session_id)
-            break
-
-
 @asynccontextmanager
 async def user_slot(
     user_id: str,
@@ -64,7 +51,11 @@ async def user_slot(
 
     # An idle session of the user makes room for a new run.
     if _user_slots[user_id].locked():
-        await _close_idle_session(user_id)
+        for session_id, session in sorted(
+            _sessions.items(), key=lambda item: item[1].idle_since):
+            if session.user_id == user_id and not session.lock.locked():
+                await close_session(session_id)
+                break
 
     # The acquire fast path never suspends, so this cannot race the acquire.
     if _user_slots[user_id].locked():
@@ -81,10 +72,7 @@ async def user_slot(
 @asynccontextmanager
 async def server_slot() -> AsyncGenerator[None]:
 
-    # An idle session of any user makes room for a new microVM.
-    if _server_slots.locked():
-        await _close_idle_session()
-
+    # Other users' idle sessions stay; the reaper frees their slots.
     if _server_slots.locked():
         raise ToolError("Server at capacity. Try again later.")
 

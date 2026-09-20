@@ -146,7 +146,7 @@ A follow-up call in the same session changes only what differs:
 - `output_files`: files to return from this call.
 
 A session ends `SANDBOX_IDLE_TIMEOUT` seconds after its last call, or earlier
-when a new run needs its slot. Sessions live in the server process and end
+when its user starts a new run without `session_id`. Sessions live in the server process and end
 with it.
 
 ## ⚙️ Limits & security
@@ -159,8 +159,9 @@ lifetime of each microVM, so of every session and pip install.
 - **Isolation:** every session boots its own microVM with its own kernel (KVM
   via libkrun), the restricted in-guest security profile and fixed RAM/vCPU
   caps. A session belongs to the user who started it. Idle sessions hold a
-  sandbox slot until they end and give way when a new run needs one. A
-  package install briefly adds a second microVM to its session.
+  sandbox slot until they end; only their own user's next run replaces them early. A
+  package install briefly adds a second microVM with 1 GiB and one vCPU, so
+  plan for up to `MAX_CONCURRENT_SANDBOXES` × (`SANDBOX_MEMORY` + 1 GiB) of RAM.
 - **Network:** scripts run in a microVM whose network policy denies all traffic
   from boot. `packages` are installed by a separate, online microVM
   from prebuilt wheels only (`--only-binary=:all:`) and handed over through a

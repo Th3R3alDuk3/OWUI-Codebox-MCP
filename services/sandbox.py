@@ -54,8 +54,9 @@ async def boot_sandbox(
         sandbox = await Sandbox.create(
             name,
             image=_settings.sandbox_image,
-            memory=_settings.sandbox_memory,
-            cpus=_settings.sandbox_cpus,
+            # pip needs little.
+            memory=1024 if online else _settings.sandbox_memory,
+            cpus=1 if online else _settings.sandbox_cpus,
             workdir=WORK_DIR,
             security=SecurityProfile.RESTRICTED,
             max_duration=_settings.sandbox_max_duration,

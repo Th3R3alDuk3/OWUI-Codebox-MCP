@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 \
     UV_NO_CACHE=1
 
 # Pango/HarfBuzz: WeasyPrint deps. Noto: the base image has no CJK and no emoji.
-RUN apt-get update \
+RUN apt-get update -o Acquire::Check-Valid-Until=false \
     && apt-get install -y --no-install-recommends \
         libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
         fonts-dejavu fonts-liberation fonts-noto-cjk fonts-noto-color-emoji \

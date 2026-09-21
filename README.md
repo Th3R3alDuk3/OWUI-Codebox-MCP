@@ -150,7 +150,8 @@ A follow-up call in the same session changes only what differs:
 
 - `session_id`: from a previous result; reuses that microVM with its packages
   and files.
-- `edits`: exact-text replacements applied to the session's code before the run.
+- `edits`: exact-text replacements applied to the session's code before the run;
+  a call passes either `code` or `edits`.
 - `packages`: packages missing from the image, by name with optional
   versions/extras; compatible wheels required.
 - `input_files`: OpenWebUI file IDs paired with paths under `/sandbox`.

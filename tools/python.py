@@ -89,16 +89,19 @@ def _clip(
         "code. Files the code writes come back only when listed in "
         "`output_files`.\n\n"
         "Each result carries a `session_id`. Pass it to keep the same microVM "
-        "with its packages and files, and fix the code with `edits` instead "
-        "of resending it. A session ends after "
-        f"{_settings.sandbox_idle_timeout:.0f}s without calls; a call without "
-        "`session_id` may replace an idle one."
+        "with its packages, files and code. To change that code, pass `edits` "
+        "with the `session_id` instead of resending the whole code. A session "
+        f"ends after {_settings.sandbox_idle_timeout:.0f}s without calls; a "
+        "call without `session_id` may replace an idle one."
     ),
 )
 async def run_python(
     code: str = Field(
         default="",
-        description="Python source to run. Omit to rerun the session's code.",
+        description=(
+            "Complete Python source; replaces the session's code. Omit it "
+            "with `edits` or to rerun the session's code unchanged."
+        ),
     ),
     session_id: str = Field(
         default="",
@@ -142,6 +145,10 @@ async def run_python(
 
     if not code and not session_id:
         raise ToolError("Pass code, or a session_id whose code to rerun or edit.")
+
+    if code and edits:
+        raise ToolError(
+            "Pass either code or edits, not both; edits change the session's code.")
 
     if not session_id:
         session_id = await open_session(user_id)

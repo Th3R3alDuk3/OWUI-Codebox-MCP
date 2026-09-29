@@ -9,12 +9,15 @@ from fastmcp.exceptions import ToolError
 from fastmcp.utilities.logging import get_logger
 from microsandbox import (
     Action,
+    Destination,
     FsEntryKind,
     Network,
     NetworkPolicy,
     Rule,
     Sandbox,
+    ScopedVerifyUpstream,
     SecurityProfile,
+    TlsConfig,
 )
 from microsandbox.types import DnsConfig
 
@@ -32,17 +35,23 @@ CODE_FILE = f"{WORK_DIR}/__main__.py"
 def _network() -> Network:
 
     url = urlsplit(_settings.sandbox_index_url)
+    host = url.hostname or ""
+    port = url.port or (443 if url.scheme == "https" else 80)
 
-    # Deny all but these; rebind protection would block a LAN index.
+    # Deny all but these names; rebind protection would block a LAN index.
     return Network(
         policy=NetworkPolicy(default_ingress=Action.DENY, rules=(
-            Rule.allow(destination="files.pythonhosted.org", port=443),
-            Rule.allow(
-                destination=url.hostname or "",
-                port=url.port or (443 if url.scheme == "https" else 80),
-            ),
+            Rule.allow(destination=Destination.domain("files.pythonhosted.org"), port=443),
+            Rule.allow(destination=Destination.domain(host), port=port),
         )),
         dns=DnsConfig(rebind_protection=False),
+        # Rules by name pass HTTPS only when it is intercepted.
+        tls=TlsConfig(
+            intercepted_ports=(443, port) if url.scheme == "https" else (443,),
+            scoped_verify_upstream=(ScopedVerifyUpstream(
+                host, not _settings.sandbox_insecure_host),
+            ),
+        ),
     )
 
 
@@ -61,10 +70,7 @@ async def boot_sandbox() -> AsyncGenerator[Sandbox]:
             security=SecurityProfile.RESTRICTED,
             max_duration=_settings.sandbox_max_duration,
             ephemeral=True,
-            env={
-                "UV_DEFAULT_INDEX": _settings.sandbox_index_url,
-                "UV_INSECURE_HOST": _settings.sandbox_insecure_host,
-            },
+            env={"UV_DEFAULT_INDEX": _settings.sandbox_index_url},
             network=_network(),
         )
     except Exception as error:

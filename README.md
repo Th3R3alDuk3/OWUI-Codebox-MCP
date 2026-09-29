@@ -85,9 +85,9 @@ uv run python main.py
 `packages` are installed from `SANDBOX_INDEX_URL`, by default PyPI. That index
 and PyPI's file host `files.pythonhosted.org` are the only destinations a
 microVM can reach; other names do not even resolve. A proxy index in the LAN
-such as Nexus or devpi fits, by name or by IP address; if it uses an own
-certificate, name it in `SANDBOX_INSECURE_HOST`. Scripts can reach the index as
-well, so it must not accept anonymous uploads.
+such as Nexus or devpi fits when addressed by name, not by IP address; if it
+uses an own certificate, name it in `SANDBOX_INSECURE_HOST`. Scripts can reach
+the index as well, so it must not accept anonymous uploads.
 
 The sandbox image's preinstalled packages come from the index it is built
 with, by default PyPI as well. Build it against another one with the matching
@@ -174,9 +174,10 @@ lifetime of each microVM, so of every session.
   sandbox slot until they end; only their own user's next run replaces them
   early. Plan for up to `MAX_CONCURRENT_SANDBOXES` × `SANDBOX_MEMORY` of RAM.
 - **Network:** a microVM's policy allows connections to the host and port of
-  `SANDBOX_INDEX_URL` and to `files.pythonhosted.org` and denies everything
-  else from boot, name resolution included. `packages` are installed from there
-  as prebuilt wheels only (`--only-binary=:all:`).
+  `SANDBOX_INDEX_URL` and to `files.pythonhosted.org`, both by name, and denies
+  everything else from boot, name resolution included. HTTPS is intercepted,
+  so an allowed host cannot be asked for another site. `packages` are
+  installed from there as prebuilt wheels only (`--only-binary=:all:`).
 - **Disk:** a microVM can write 4 GiB to its own disk (microsandbox default),
   `packages` included; it is removed when the session ends.
 - **Files:** transfers are cut off at the size limit, never buffered beyond it.

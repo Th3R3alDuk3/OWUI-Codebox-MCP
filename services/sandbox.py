@@ -11,6 +11,7 @@ from microsandbox import (
     Action,
     Destination,
     FsEntryKind,
+    HttpConfig,
     Network,
     NetworkPolicy,
     Rule,
@@ -50,6 +51,14 @@ def _network() -> Network:
             intercepted_ports=(443, port) if url.scheme == "https" else (443,),
             scoped_verify_upstream=(ScopedVerifyUpstream(
                 host, not _settings.sandbox_insecure_host),
+            ),
+        ),
+        # Unknown names already fail at DNS; this covers other ports and IP literals.
+        http=HttpConfig(
+            deny_response=True,
+            deny_message=(
+                "{host} is blocked by the sandbox network policy; only "
+                f"{_settings.sandbox_index_url} is reachable."
             ),
         ),
     )

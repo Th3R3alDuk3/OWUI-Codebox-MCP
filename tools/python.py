@@ -228,15 +228,14 @@ async def run_python(
         stdout, stderr = bytearray(), bytearray()
         # Stays -1 when the run is cut short for printing too much.
         exit_code = -1
+        exited = False
         started = monotonic()
 
         try:
-            # `exec_stream` ignores its own `timeout`.
+            # The SDK `timeout` ends in a plain exit event, like a crash.
             async with timeout(_settings.sandbox_exec_timeout):
 
-                # Empty stdin makes `input()` fail at once.
-                run = await session.sandbox.exec_stream("python",
-                    [CODE_FILE], stdin=b"")
+                run = await session.sandbox.exec_stream("python", [CODE_FILE])
 
                 try:
                     # The SDK queues unread output without bound; the kill ends a flood.
@@ -248,14 +247,16 @@ async def run_python(
                             stderr += event.data or b""
                         elif event.code is not None:
                             exit_code = event.code
+                            exited = True
 
                         printed = len(stdout) + len(stderr)
 
                         if printed > _settings.sandbox_max_file_size:
                             break
                 finally:
-                    # Ends a run that timed out or printed too much; no-op after exit.
-                    await run.kill()
+                    # Ends a timed-out or flooding run; after exit, `kill` stalls 3s.
+                    if not exited:
+                        await run.kill()
 
         except TimeoutError as error:
             raise ToolError(

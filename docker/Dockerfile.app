@@ -10,4 +10,6 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 COPY . .
 
+EXPOSE 8000
+
 CMD ["uv", "run", "--no-sync", "python", "main.py"]

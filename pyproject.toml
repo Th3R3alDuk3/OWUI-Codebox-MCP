@@ -1,6 +1,6 @@
 [project]
 name = "owui-codebox-mcp"
-version = "0.6.6"
+version = "0.6.7"
 description = "Isolated Python sandboxes for OpenWebUI via MCP."
 readme = "README.md"
 license = "MIT"

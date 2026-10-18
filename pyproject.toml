@@ -6,11 +6,11 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
 dependencies = [
-    "fastmcp>=4.1.0",
+    "fastmcp>=4.1.1",
     "httpx2>=2.13.1",
     "microsandbox>=0.7.8",
-    "pydantic>=2.14.0",
-    "pydantic-settings>=2.15.0",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.0",
     "rich>=15.0.0",
 ]
 

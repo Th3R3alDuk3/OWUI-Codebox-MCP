@@ -14,9 +14,9 @@ attachments and returns produced files as download links. Built on
 
 Requires a Linux host with **KVM** and Docker.
 
-Turn nested virtualization off on the host (`kvm_amd` on AMD). With it on,
-scripts get a working `/dev/kvm` inside their microVM and reach the host's
-nested-virtualization code:
+microsandbox keeps `/dev/kvm` out of the microVM. Turn nested virtualization
+off on the host as well (`kvm_amd` on AMD), so the host's
+nested-virtualization code stays out of reach if that ever changes:
 
 ```bash
 echo "options kvm_intel nested=0" | sudo tee /etc/modprobe.d/kvm-nested.conf

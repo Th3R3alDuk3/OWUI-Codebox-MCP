@@ -18,6 +18,7 @@ from models.python import (
     InputFile,
     InstalledPackage,
     OutputFile,
+    PackageList,
     RunResult,
 )
 from services.owui import download_file, upload_file
@@ -41,7 +42,7 @@ _packages_cache: list[InstalledPackage] | None = None
         "installing."
     ),
 )
-async def list_python_packages() -> list[InstalledPackage]:
+async def list_python_packages() -> PackageList:
 
     global _packages_cache
 
@@ -58,7 +59,7 @@ async def list_python_packages() -> list[InstalledPackage]:
                 list[InstalledPackage]
             ).validate_json(output.stdout_bytes)
 
-    return _packages_cache
+    return PackageList(packages=_packages_cache)
 
 
 def _clip(

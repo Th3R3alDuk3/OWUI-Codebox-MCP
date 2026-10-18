@@ -6,7 +6,8 @@ _settings = get_settings()
 
 _REQUEST_TIMEOUT_SECONDS = 60.0
 
-_FILE_UPLOAD_URL = "{base_url}/api/v1/files/"
+# Output files are only downloaded, so OpenWebUI skips extraction and embedding.
+_FILE_UPLOAD_URL = "{base_url}/api/v1/files/?process=false"
 _FILE_DOWNLOAD_URL = "{base_url}/api/v1/files/{file_id}/content"
 
 

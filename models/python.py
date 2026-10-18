@@ -10,6 +10,12 @@ class InstalledPackage(BaseModel):
     )
 
 
+class PackageList(BaseModel):
+    packages: list[InstalledPackage] = Field(
+        description="Packages preinstalled in the sandbox image.",
+    )
+
+
 class Edit(BaseModel):
     old: str = Field(
         min_length=1,

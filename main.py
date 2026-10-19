@@ -41,4 +41,6 @@ if __name__ == "__main__":
         port=8000,
         transport="http",
         stateless_http=True,
+        # The banner checks PyPI for FastMCP updates.
+        show_banner=False,
     )

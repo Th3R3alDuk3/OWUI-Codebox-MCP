@@ -239,7 +239,7 @@ async def run_python(
                 run = await session.sandbox.exec_stream("python", [CODE_FILE])
 
                 try:
-                    # The SDK queues unread output without bound; the kill ends a flood.
+                    # Caps the total output; the kill ends a flood.
                     async for event in run:
 
                         if event.event_type == ExecEventType.STDOUT:
@@ -255,7 +255,7 @@ async def run_python(
                         if printed > _settings.sandbox_max_file_size:
                             break
                 finally:
-                    # Ends a timed-out or flooding run; after exit, `kill` stalls 3s.
+                    # Ends a timed-out or flooding run; after exit, `kill` raises.
                     if not exited:
                         await run.kill()
 

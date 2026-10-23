@@ -54,13 +54,9 @@ def _network() -> Network:
             ),
         ),
         # Unknown names already fail at DNS; this covers other ports and IP literals.
-        http=HttpConfig(
-            deny_response=True,
-            deny_message=(
-                "{host} is blocked by the sandbox network policy; only "
-                f"{_settings.sandbox_index_url} is reachable."
-            ),
-        ),
+        http=HttpConfig(network_deny_message=(
+            "Blocked by the sandbox network policy; only "
+            f"{_settings.sandbox_index_url} is reachable.")),
     )
 
 

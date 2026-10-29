@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     owui_verify_tls: bool
 
     max_concurrent_sandboxes: int
-    max_concurrent_sandboxes_per_user: int
 
     rate_limit_rps: float
     rate_limit_burst: int
@@ -29,7 +28,7 @@ class Settings(BaseSettings):
     # MiB
     sandbox_memory: int
     sandbox_cpus: int
-    # seconds; the code run
+    # seconds; per cell
     sandbox_exec_timeout: float
     # seconds; how long a session waits for the next call
     sandbox_idle_timeout: float

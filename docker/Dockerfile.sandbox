@@ -15,6 +15,8 @@ RUN apt-get update -o Acquire::Check-Valid-Until=false \
     && rm -rf /var/lib/apt/lists/*
 
 RUN uv pip install --compile-bytecode \
+    # kernel for run_python
+    ipykernel \
     # data & math
     numpy pandas polars pyarrow duckdb scipy sympy statsmodels scikit-learn \
     # plotting

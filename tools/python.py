@@ -1,4 +1,5 @@
 from asyncio import Lock, timeout
+from contextlib import suppress
 from mimetypes import guess_type
 from pathlib import Path
 from time import monotonic
@@ -6,15 +7,16 @@ from time import monotonic
 from fastmcp.dependencies import CurrentAccessToken, TokenClaim
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken
-from fastmcp.tools import tool
+from fastmcp.tools import ToolResult, tool
 from fastmcp.utilities.logging import get_logger
-from microsandbox import ExecEventType
+from fastmcp.utilities.types import Image
+from mcp.types import TextContent
+from microsandbox import ExecEventType, JobError
 from pydantic import Field, TypeAdapter
 from rich.text import Text
 
 from config import get_settings
 from models.python import (
-    Edit,
     InputFile,
     InstalledPackage,
     OutputFile,
@@ -22,8 +24,15 @@ from models.python import (
     RunResult,
 )
 from services.owui import download_file, upload_file
-from services.sandbox import CODE_FILE, WORK_DIR, boot_sandbox, read_file, write_file
-from services.session import open_session, server_slot, use_session
+from services.sandbox import (
+    KERNEL_CLIENT,
+    KERNEL_CONNECTION_FILE,
+    WORK_DIR,
+    boot_sandbox,
+    read_file,
+    write_file,
+)
+from services.session import server_slot, use_session
 
 _settings = get_settings()
 logger = get_logger(__name__)
@@ -36,11 +45,7 @@ _packages_cache: list[InstalledPackage] | None = None
 
 @tool(
     name="list_python_packages",
-    description=(
-        "List the packages preinstalled in the sandbox image. Check it before "
-        "requesting `packages` in run_python; only missing ones need "
-        "installing."
-    ),
+    description="List the packages preinstalled in the sandbox image.",
 )
 async def list_python_packages() -> PackageList:
 
@@ -80,48 +85,34 @@ def _clip(
 @tool(
     name="run_python",
     description=(
-        "Run Python in an isolated microVM and return stdout, stderr and the "
-        f"exit code. The working directory is '{WORK_DIR}'. Runs are killed "
-        f"after {_settings.sandbox_exec_timeout:.0f}s and only the last "
+        "Run Python in a Jupyter kernel inside an isolated microVM and return "
+        "stdout, stderr and the exit code. The working directory is "
+        f"'{WORK_DIR}'. Runs are killed after "
+        f"{_settings.sandbox_exec_timeout:.0f}s and only the last "
         f"{_settings.sandbox_max_output:,} characters of each stream are returned, "
         "so print summaries, not whole datasets.\n\n"
         "The sandbox reaches only its package index: packages come from "
         "`packages` and data from `input_files`, never by downloading in the "
         "code. Files the code writes come back only when listed in "
-        "`output_files`.\n\n"
-        "Each result carries a `session_id`. Pass it to keep the same microVM "
-        "with its packages, files and code. To change that code, pass `edits` "
-        "with the `session_id` instead of resending the whole code. A session "
-        f"ends after {_settings.sandbox_idle_timeout:.0f}s without calls; a "
-        "call without `session_id` may replace an idle one."
+        "`output_files`, in the same or a later call.\n\n"
+        "Each call runs `code` as the next cell in the user's kernel; "
+        "variables, imports, packages and files carry over until it has been "
+        f"idle for {_settings.sandbox_idle_timeout:.0f}s."
     ),
+    # A ToolResult return carries no schema of its own.
+    output_schema=RunResult.model_json_schema(),
 )
 async def run_python(
     code: str = Field(
-        default="",
-        description=(
-            "Complete Python source; replaces the session's code. Omit it "
-            "with `edits` or to rerun the session's code unchanged."
-        ),
-    ),
-    session_id: str = Field(
-        default="",
-        description="From a previous result. Omit to start a new session.",
-    ),
-    edits: list[Edit] = Field(
-        default_factory=list,
-        description=(
-            "Text replacements applied in order to the session's code before "
-            "the run."
-        ),
+        description="Python code to run as the next notebook cell.",
     ),
     packages: list[str] = Field(
         default_factory=list,
         max_length=_settings.sandbox_max_packages,
         description=(
-            "Packages missing from the sandbox image (see list_python_packages) "
-            "as requirement specifiers with optional version or extras; prebuilt "
-            "wheels only. They stay installed for the session."
+            "Packages to install as requirement specifiers with optional "
+            "version or extras; prebuilt wheels only, preinstalled ones are "
+            "skipped."
         ),
     ),
     input_files: list[InputFile] = Field(
@@ -140,24 +131,29 @@ async def run_python(
             f"e.g. ['{WORK_DIR}/plot.png']."
         ),
     ),
+    view_images: list[str] = Field(
+        default_factory=list,
+        max_length=_settings.sandbox_max_files,
+        description=(
+            "Images the code wrote that you want to look at yourself; PNG, "
+            "JPEG, GIF or WebP up to 5 MB."
+        ),
+    ),
     token: AccessToken = CurrentAccessToken(),
     user_id: str = TokenClaim("id"),
-) -> RunResult:
+) -> ToolResult:
 
-    if not code and not session_id:
-        raise ToolError("Pass code, or a session_id whose code to rerun or edit.")
+    async with use_session(user_id) as session:
 
-    if code and edits:
-        raise ToolError(
-            "Pass either code or edits, not both; edits change the session's code.")
+        kernel = session.kernel
 
-    if not session_id:
-        session_id = await open_session(user_id)
-
-    async with use_session(session_id, user_id) as session:
-
-        if code:
-            await session.sandbox.fs.write(CODE_FILE, code.encode())
+        # Boots while packages and input files arrive.
+        if kernel is None or (await kernel.inspect()).state != "running":
+            kernel = session.kernel = await session.sandbox.exec_detached("python", [
+                "-m", "ipykernel_launcher", "-f", KERNEL_CONNECTION_FILE,
+                "--InteractiveShell.colors=nocolor",
+                "--InteractiveShell.xmode=Plain",
+            ], stdin=b"")
 
         if packages:
 
@@ -167,7 +163,7 @@ async def run_python(
 
             if installed.exit_code != 0:
                 logger.warning("session %s: package install failed\n%s",
-                    session_id, installed.stderr_text.strip())
+                    user_id, installed.stderr_text.strip())
                 raise ToolError(
                     "Could not install the requested packages. "
                     "Check the package names and versions. Each package and "
@@ -202,29 +198,8 @@ async def run_python(
             except Exception as error:
                 raise ToolError(
                     f"Could not copy '{input_file.path}' into the sandbox. "
-                    f"The path must be a file under {WORK_DIR} other than "
-                    f"{CODE_FILE}."
+                    f"The path must be a file under {WORK_DIR}."
                 ) from error
-
-        # Applied last: a failed install or input file must not consume them.
-        if edits:
-
-            text = (await read_file(
-                session.sandbox,
-                CODE_FILE,
-                _settings.sandbox_max_file_size,
-            )).decode()
-
-            for index, edit in enumerate(edits):
-                found = text.count(edit.old)
-                if found != 1:
-                    raise ToolError(
-                        f"edits[{index}].old must occur exactly once in the "
-                        f"code, found {found} times."
-                    )
-                text = text.replace(edit.old, edit.new)
-
-            await session.sandbox.fs.write(CODE_FILE, text.encode())
 
         stdout, stderr = bytearray(), bytearray()
         # Stays -1 when the run is cut short for printing too much.
@@ -236,7 +211,12 @@ async def run_python(
             # The SDK `timeout` ends in a plain exit event, like a crash.
             async with timeout(_settings.sandbox_exec_timeout):
 
-                run = await session.sandbox.exec_stream("python", [CODE_FILE])
+                kernel_pid = (await kernel.inspect()).pid
+
+                # Isolated, so files in the workdir cannot shadow its imports.
+                run = await session.sandbox.exec_stream("python", [
+                    "-I", "-c", KERNEL_CLIENT, KERNEL_CONNECTION_FILE, str(kernel_pid)
+                ], stdin=code.encode())
 
                 try:
                     # Caps the total output; the kill ends a flood.
@@ -258,18 +238,24 @@ async def run_python(
                     # Ends a timed-out or flooding run; after exit, `kill` raises.
                     if not exited:
                         await run.kill()
+                        # It may still run the cell; the next call starts a new one.
+                        with suppress(JobError):
+                            await kernel.kill()
+                        session.kernel = None
 
         except TimeoutError as error:
             raise ToolError(
                 f"Execution timed out after "
-                f"{_settings.sandbox_exec_timeout:.0f}s and was killed. Make "
-                "the code faster, or split the work across calls and keep "
-                "intermediate results in files."
+                f"{_settings.sandbox_exec_timeout:.0f}s; the kernel restarts, "
+                "so variables are lost, files remain. Make the code faster, "
+                "or split the work across calls."
             ) from error
 
         logger.info("session %s: exit %d after %.1fs",
-            session_id, exit_code, monotonic() - started)
+            user_id, exit_code, monotonic() - started)
+
         uploaded_files: list[OutputFile] = []
+        images: list[Image] = []
 
         if exit_code == 0:
 
@@ -312,10 +298,33 @@ async def run_python(
                     download_url=download_url,
                 ))
 
-    return RunResult(
+            for image_path in view_images:
+
+                image_format = Path(image_path).suffix[1:].lower()
+
+                try:
+                    if image_format not in ("png", "jpg", "jpeg", "gif", "webp"):
+                        raise ValueError("not an image format models accept")
+                    # Model APIs reject larger images.
+                    data = await read_file(session.sandbox, image_path, 5 * 2**20)
+                except Exception as error:
+                    raise ToolError(
+                        f"'{image_path}' cannot be viewed. It must be a PNG, "
+                        f"JPEG, GIF or WebP file under {WORK_DIR} that the code "
+                        "wrote, at most 5 MB."
+                    ) from error
+
+                images.append(Image(data=data, format=image_format))
+
+    result = RunResult(
         exit_code=exit_code,
         stdout=_clip(stdout),
         stderr=_clip(stderr),
         output_files=uploaded_files,
-        session_id=session_id,
+    )
+
+    # One JSON text block, so clients do not append the structured copy again.
+    return ToolResult(
+        content=[TextContent(type="text", text=result.model_dump_json()), *images],
+        structured_content=result,
     )

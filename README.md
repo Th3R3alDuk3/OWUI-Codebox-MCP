@@ -6,8 +6,9 @@
 
 > Isolated Python sandboxes for OpenWebUI via MCP.
 
-Runs scripts in microVMs that stay alive for a short session, accepts OpenWebUI
-attachments and returns produced files as download links. Built on
+Runs Python as notebook cells in a Jupyter kernel inside microVMs that stay
+alive for a short session, accepts OpenWebUI attachments and returns produced
+files as download links. Built on
 [microsandbox](https://github.com/superradcompany/microsandbox).
 
 ## 🚀 Setup
@@ -30,9 +31,10 @@ sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
    docker build -f docker/Dockerfile.app -t owui-codebox-mcp .
    ```
 
-   The sandbox image includes data, plotting, image and Office/PDF libraries
-   plus fonts; see [Dockerfile.sandbox](docker/Dockerfile.sandbox) for the
-   package list. Packages are unpinned, so a rebuild picks up updates.
+   The sandbox image includes the Jupyter kernel, data, plotting, image and
+   Office/PDF libraries plus fonts; see
+   [Dockerfile.sandbox](docker/Dockerfile.sandbox) for the package list.
+   Packages are unpinned, so a rebuild picks up updates.
 
 2. Configure:
 
@@ -85,8 +87,8 @@ uv run python main.py
 and PyPI's file host `files.pythonhosted.org` are the only destinations a
 microVM can reach; other names do not even resolve. A proxy index in the LAN
 such as Nexus or devpi fits when addressed by name, not by IP address; if it
-uses an own certificate, name it in `SANDBOX_INSECURE_HOST`. Scripts can reach
-the index as well, so it must not accept anonymous uploads.
+uses an own certificate, name it in `SANDBOX_INSECURE_HOST`. Code in the
+sandbox can reach the index as well, so it must not accept anonymous uploads.
 
 The sandbox image's preinstalled packages come from the index it is built
 with, by default PyPI as well. Build it against another one with the matching
@@ -119,46 +121,44 @@ docker exec owui-codebox-mcp uv run --no-sync msb pull \
   ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest
 ```
 
-`SANDBOX_IMAGE` accepts any OCI reference. Registry credentials, plain-HTTP
-registries and custom CAs go into `~/.microsandbox/config.json`, which lives
-in the `owui-codebox-data` volume when the server runs in Docker.
+`SANDBOX_IMAGE` accepts any OCI reference to an image with `uv` and
+`ipykernel`. Registry credentials, plain-HTTP registries and custom CAs go into
+`~/.microsandbox/config.json`, which lives in the `owui-codebox-data` volume
+when the server runs in Docker.
 
 ## 🛠️ Tools
 
 | Tool | Description |
 |---|---|
-| `run_python` | Run Python in a session microVM with optional packages, input/output files and code edits |
+| `run_python` | Run Python as notebook cells in the user's microVM with optional packages and input/output files |
 | `list_python_packages` | List packages already installed in the sandbox image |
 
 ```json
 {
-  "code": "import pandas as pd; pd.DataFrame({'a': [1, 2]}).to_csv('/sandbox/result.csv')",
+  "code": "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2]})\ndf.to_csv('/sandbox/result.csv')",
   "output_files": ["/sandbox/result.csv"]
 }
 ```
 
-A follow-up call in the same session changes only what differs:
+The next call runs the next cell in the same kernel:
 
 ```json
 {
-  "session_id": "3f9a1c2e",
-  "edits": [{"old": "[1, 2]", "new": "[1, 2, 3]"}],
-  "output_files": ["/sandbox/result.csv"]
+  "code": "df.describe()"
 }
 ```
 
-- `session_id`: from a previous result; reuses that microVM with its packages
-  and files.
-- `edits`: exact-text replacements applied to the session's code before the run;
-  a call passes either `code` or `edits`.
-- `packages`: packages missing from the image, by name with optional
-  versions/extras; compatible wheels required.
+- `code`: the next cell; the value of its last expression is printed.
+- `packages`: packages to install, by name with optional versions/extras;
+  compatible wheels required, preinstalled ones are skipped.
 - `input_files`: OpenWebUI file IDs paired with paths under `/sandbox`.
-- `output_files`: files to return from this call.
+- `output_files`: files to return to the user, also ones an earlier call wrote.
+- `view_images`: images the model looks at itself (PNG, JPEG, GIF or WebP, at
+  most 5 MB); only useful with a vision model.
 
-A session ends `SANDBOX_IDLE_TIMEOUT` seconds after its last call, or earlier
-when its user starts a new run without `session_id`. Sessions live in the
-server process and end with it.
+Each user has one session: a microVM with its kernel, packages and files. It
+ends `SANDBOX_IDLE_TIMEOUT` seconds after its last call, lives in the server
+process and ends with it.
 
 ## ⚙️ Limits & security
 
@@ -167,11 +167,11 @@ output limits, parallel sandboxes and per-user rate limits.
 Keep `SANDBOX_MAX_DURATION` above `SANDBOX_EXEC_TIMEOUT`; it bounds the
 lifetime of each microVM, so of every session.
 
-- **Isolation:** every session boots its own microVM with its own kernel (KVM
-  via libkrun), the restricted in-guest security profile and fixed RAM/vCPU
-  caps. A session belongs to the user who started it. Idle sessions hold a
-  sandbox slot until they end; only their own user's next run replaces them
-  early. Plan for up to `MAX_CONCURRENT_SANDBOXES` × `SANDBOX_MEMORY` of RAM.
+- **Isolation:** every session boots its own microVM with its own Linux
+  kernel (KVM via libkrun), the restricted in-guest security profile and fixed
+  RAM/vCPU caps. Each user has one session, which holds a sandbox slot until
+  it ends; a user's runs take turns. Plan for up to
+  `MAX_CONCURRENT_SANDBOXES` × `SANDBOX_MEMORY` of RAM.
 - **Network:** a microVM's policy allows connections to the host and port of
   `SANDBOX_INDEX_URL` and to `files.pythonhosted.org`, both by name, and denies
   everything else from boot, name resolution included. HTTPS is intercepted,
@@ -185,6 +185,8 @@ lifetime of each microVM, so of every session.
 - **Errors:** tool errors never carry exception text, so no URLs, hosts or stack
   traces leak into the chat.
 - **Output:** stdout/stderr are read as a stream. A run that prints more than
-  `SANDBOX_MAX_FILE_SIZE` bytes is killed; the last `SANDBOX_MAX_OUTPUT`
-  characters of each stream are returned.
+  `SANDBOX_MAX_FILE_SIZE` bytes is stopped and its kernel restarts; the last
+  `SANDBOX_MAX_OUTPUT` characters of each stream are returned. The kernel
+  buffers output in memory, so with a small `SANDBOX_MEMORY` such as 512 MiB a
+  flood can kill the kernel first; the run then reports that it died.
 - **Host access:** the server needs `/dev/kvm` only.

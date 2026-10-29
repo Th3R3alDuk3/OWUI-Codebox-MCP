@@ -1,6 +1,7 @@
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from functools import cache
+from pathlib import Path
 from posixpath import dirname, join, normpath
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -28,8 +29,9 @@ _settings = get_settings()
 logger = get_logger(__name__)
 
 WORK_DIR = "/sandbox"
-# In the workdir for sibling imports; the name avoids input files.
-CODE_FILE = f"{WORK_DIR}/__main__.py"
+# Outside the workdir, away from the user's files.
+KERNEL_CONNECTION_FILE = "/tmp/kernel.json"
+KERNEL_CLIENT = (Path(__file__).parent / "kernel_client.py").read_text()
 
 
 @cache
@@ -99,9 +101,8 @@ async def write_file(
 
     sandbox_path = normpath(join(WORK_DIR, file_path))
 
-    if not sandbox_path.startswith(f"{WORK_DIR}/") \
-        or sandbox_path == CODE_FILE:
-        raise ValueError("path outside the sandbox workdir or the code file")
+    if not sandbox_path.startswith(f"{WORK_DIR}/"):
+        raise ValueError("path outside the sandbox workdir")
 
     # `fs.write` does not create missing parents; `fs.mkdir` does.
     await sandbox.fs.mkdir(dirname(sandbox_path))

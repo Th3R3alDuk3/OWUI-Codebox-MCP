@@ -16,16 +16,6 @@ class PackageList(BaseModel):
     )
 
 
-class Edit(BaseModel):
-    old: str = Field(
-        min_length=1,
-        description="Text to replace; must occur exactly once in the code.",
-    )
-    new: str = Field(
-        description="Replacement text; empty removes `old`.",
-    )
-
-
 class InputFile(BaseModel):
     id: str = Field(
         description="OpenWebUI ID of a file the user attached.",
@@ -50,8 +40,8 @@ class OutputFile(BaseModel):
 class RunResult(BaseModel):
     exit_code: int = Field(
         description=(
-            "Exit code; 0 means success, -1 means killed "
-            "(out of memory, a native crash or too much output)."
+            "Exit code; 0 means success, 1 an error, -1 that the run printed "
+            "too much and the kernel restarted, losing its variables."
         ),
     )
     stdout: str = Field(
@@ -65,7 +55,4 @@ class RunResult(BaseModel):
             "Files returned to the user; empty unless `output_files` was set "
             "and the run succeeded."
         ),
-    )
-    session_id: str = Field(
-        description="Pass to the next call to continue in this microVM.",
     )

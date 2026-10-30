@@ -15,6 +15,7 @@ from microsandbox import (
     HttpConfig,
     Network,
     NetworkPolicy,
+    OutboundProxy,
     Rule,
     Sandbox,
     ScopedVerifyUpstream,
@@ -79,6 +80,10 @@ async def boot_sandbox() -> AsyncGenerator[Sandbox]:
             ephemeral=True,
             env={"UV_DEFAULT_INDEX": _settings.sandbox_index_url},
             network=_network(),
+            proxy=(  # pyright: ignore[reportCallIssue]
+                OutboundProxy.http_connect(_settings.sandbox_proxy)
+                if _settings.sandbox_proxy else None
+            ),
         )
     except Exception as error:
         logger.exception("sandbox %s: start failed", name)

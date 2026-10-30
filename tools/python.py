@@ -90,29 +90,34 @@ def _clip(
         f"'{WORK_DIR}'. Runs are killed after "
         f"{_settings.sandbox_exec_timeout:.0f}s and only the last "
         f"{_settings.sandbox_max_output:,} characters of each stream are returned, "
-        "so print summaries, not whole datasets.\n\n"
+        "so print summaries, not whole datasets. Exit code -1 means the run "
+        "printed too much and the kernel restarted, losing its variables.\n\n"
         "The sandbox reaches only its package index: packages come from "
         "`packages` and data from `input_files`, never by downloading in the "
-        "code. Files the code writes come back only when listed in "
-        "`output_files`, in the same or a later call.\n\n"
+        "code. Files the code writes reach the user only when listed in "
+        "`output_files`, in the same or a later call; pass on their "
+        "`download_url`.\n\n"
         "Each call runs `code` as the next cell in the user's kernel; "
         "variables, imports, packages and files carry over until it has been "
-        f"idle for {_settings.sandbox_idle_timeout:.0f}s."
+        f"idle for {_settings.sandbox_idle_timeout:.0f}s.\n\n"
+        "Viewing images is expensive and they stay in the chat's context, so "
+        "`view_images` is the exception: use it only when the user asks or "
+        "the task is impossible without seeing an image, and list as few as "
+        "possible. Do not use it to check your own plots or to show images to "
+        "the user; `output_files` delivers those."
     ),
     # A ToolResult return carries no schema of its own.
     output_schema=RunResult.model_json_schema(),
 )
 async def run_python(
     code: str = Field(
-        description="Python code to run as the next notebook cell.",
+        description="Python code; the value of its last expression is printed.",
     ),
     packages: list[str] = Field(
         default_factory=list,
-        max_length=_settings.sandbox_max_packages,
         description=(
-            "Packages to install as requirement specifiers with optional "
-            "version or extras; prebuilt wheels only, preinstalled ones are "
-            "skipped."
+            "Requirement specifiers to install; prebuilt wheels only, "
+            "preinstalled ones are skipped."
         ),
     ),
     input_files: list[InputFile] = Field(
@@ -126,17 +131,14 @@ async def run_python(
     output_files: list[str] = Field(
         default_factory=list,
         max_length=_settings.sandbox_max_files,
-        description=(
-            "Paths of files the code writes that the user should receive, "
-            f"e.g. ['{WORK_DIR}/plot.png']."
-        ),
+        description=f"Paths of files for the user, e.g. ['{WORK_DIR}/plot.png'].",
     ),
     view_images: list[str] = Field(
         default_factory=list,
-        max_length=_settings.sandbox_max_files,
+        max_length=3,
         description=(
-            "Images the code wrote that you want to look at yourself; PNG, "
-            "JPEG, GIF or WebP up to 5 MB."
+            "Images the code wrote that you must see yourself; PNG, JPEG, GIF "
+            "or WebP up to 5 MB."
         ),
     ),
     token: AccessToken = CurrentAccessToken(),
@@ -153,6 +155,8 @@ async def run_python(
                 "-m", "ipykernel_launcher", "-f", KERNEL_CONNECTION_FILE,
                 "--InteractiveShell.colors=nocolor",
                 "--InteractiveShell.xmode=Plain",
+                # `Out` would keep results in RAM after `del`.
+                "--InteractiveShell.cache_size=0",
             ], stdin=b"")
 
         if packages:

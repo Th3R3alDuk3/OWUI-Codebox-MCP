@@ -6,51 +6,36 @@
 
 > Isolated Python sandboxes for OpenWebUI via MCP.
 
-Runs Python as notebook cells in a Jupyter kernel inside microVMs that stay
-alive for a short session, accepts OpenWebUI attachments and returns produced
-files as download links. Built on
-[microsandbox](https://github.com/superradcompany/microsandbox).
+- **Notebook sessions:** Python runs as cells in a Jupyter kernel; variables,
+  packages and files carry over.
+- **Isolated:** each user gets a microVM with its own kernel, built on
+  [microsandbox](https://github.com/superradcompany/microsandbox).
+- **Files:** OpenWebUI attachments go in, produced files come back as download
+  links.
+- **Closed network:** a microVM reaches only the package index.
 
 ## 🚀 Setup
 
 Requires a Linux host with **KVM** and Docker.
 
-microsandbox keeps `/dev/kvm` out of the microVM. Turn nested virtualization
-off on the host as well (`kvm_amd` on AMD), so the host's
-nested-virtualization code stays out of reach if that ever changes:
-
-```bash
-echo "options kvm_intel nested=0" | sudo tee /etc/modprobe.d/kvm-nested.conf
-sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
-```
-
-1. Build the sandbox image and the server image:
+1. Build the images. [Dockerfile.sandbox](docker/Dockerfile.sandbox) lists the
+   preinstalled packages; they are unpinned, so a rebuild updates them.
 
    ```bash
    docker build -f docker/Dockerfile.sandbox -t owui-codebox-sandbox .
    docker build -f docker/Dockerfile.app -t owui-codebox-mcp .
    ```
 
-   The sandbox image includes the Jupyter kernel, data, plotting, image and
-   Office/PDF libraries plus fonts; see
-   [Dockerfile.sandbox](docker/Dockerfile.sandbox) for the package list.
-   Packages are unpinned, so a rebuild picks up updates.
-
-2. Configure:
+2. Create the configuration, then set `JWT_SECRET` to OpenWebUI's
+   `WEBUI_SECRET_KEY` and `OWUI_BASE_URL` to an OpenWebUI URL this server can
+   reach.
 
    ```bash
    cp .env.example .env
    ```
 
-   - `JWT_SECRET`: OpenWebUI's `WEBUI_SECRET_KEY`.
-   - `OWUI_BASE_URL`: OpenWebUI URL reachable from this server.
-   - `OWUI_VERIFY_TLS`: keep `true`; use `false` only if required for
-     self-signed certificates.
-   - `SANDBOX_INDEX_URL`: package index the microVMs install from, by
-     default PyPI; see [Package index](#package-index).
-
-3. Start the server and load the sandbox image into it. The container needs
-   the KVM device and a volume so loaded images survive restarts:
+3. Start the server and load the sandbox image into it. The volume keeps loaded
+   images across restarts.
 
    ```bash
    docker run -d -p 8000:8000 \
@@ -66,55 +51,17 @@ sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
 
 4. Connect OpenWebUI to `http://<host>:8000/mcp`.
 
-Requests need a signed JWT with the user in the `id` claim. Use a TLS reverse
-proxy outside a trusted network.
-
-### Without Docker
-
-For testing, the server runs directly with [uv](https://docs.astral.sh/uv/).
-Its user must be able to read and write `/dev/kvm`; `uv run msb doctor` checks
-that. The sandbox image is still built with Docker as above.
-
-```bash
-uv sync
-docker save owui-codebox-sandbox | uv run msb load
-uv run python main.py
-```
-
-### Package index
-
-`packages` are installed from `SANDBOX_INDEX_URL`, by default PyPI. That index
-and PyPI's file host `files.pythonhosted.org` are the only destinations a
-microVM can reach; other names do not even resolve. A proxy index in the LAN
-such as Nexus or devpi fits when addressed by name, not by IP address; if it
-uses an own certificate, name it in `SANDBOX_INSECURE_HOST`. Code in the
-sandbox can reach the index as well, so it must not accept anonymous uploads.
-
-The sandbox image's preinstalled packages come from the index it is built
-with, by default PyPI as well. Build it against another one with the matching
-build arguments:
-
-```bash
-docker build -f docker/Dockerfile.sandbox \
-  --build-arg UV_DEFAULT_INDEX=https://nexus.example.com/repository/pypi/simple \
-  --build-arg UV_INSECURE_HOST=nexus.example.com \
-  -t owui-codebox-sandbox .
-```
-
-The server image can use the same index: set it in the `[tool.uv]` block of
-[pyproject.toml](pyproject.toml) and run `uv lock`; keep those changes local.
-The `FROM` images of both Dockerfiles must be reachable as well.
-
 ### Prebuilt images
 
-CI publishes both images to ghcr.io:
+CI publishes both images to ghcr.io. The sandbox image is rebuilt monthly.
 
-- `ghcr.io/th3r3alduk3/owui-codebox-mcp:latest` replaces the local server build.
-- `ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest` goes into `SANDBOX_IMAGE`.
-  It is rebuilt monthly; `msb pull --force` fetches the update.
+| Image | Use |
+|---|---|
+| `ghcr.io/th3r3alduk3/owui-codebox-mcp:latest` | Replaces the local server build |
+| `ghcr.io/th3r3alduk3/owui-codebox-sandbox:latest` | Goes into `SANDBOX_IMAGE` |
 
-The server pulls a missing `SANDBOX_IMAGE` on the first tool call, which can
-outlast the client's tool timeout, so pull it beforehand:
+Pull the sandbox image beforehand, as a pull on the first tool call can outlast
+the client's tool timeout. `--force` fetches updates.
 
 ```bash
 docker exec owui-codebox-mcp uv run --no-sync msb pull \
@@ -123,70 +70,78 @@ docker exec owui-codebox-mcp uv run --no-sync msb pull \
 
 `SANDBOX_IMAGE` accepts any OCI reference to an image with `uv` and
 `ipykernel`. Registry credentials, plain-HTTP registries and custom CAs go into
-`~/.microsandbox/config.json`, which lives in the `owui-codebox-data` volume
-when the server runs in Docker.
+`~/.microsandbox/config.json` in the `owui-codebox-data` volume.
+
+### Own package index
+
+`packages` are installed as prebuilt wheels from `SANDBOX_INDEX_URL`, by default
+PyPI. For an index in the LAN such as Nexus or devpi:
+
+| Setting | Value |
+|---|---|
+| `SANDBOX_INDEX_URL` | Index URL, by name and not by IP address |
+| `SANDBOX_INSECURE_HOST` | Host name, if the index uses an own certificate |
+| `SANDBOX_PROXY` | `IP:port`, if the index is only reachable through an HTTP proxy |
+
+> [!WARNING]
+> Code in the sandbox can reach the index too, so it must not accept anonymous
+> uploads.
+
+A proxy receives `http://` and `https://` targets as CONNECT by IP address and
+has to allow that address and port. Names must still resolve on the server, and
+image pulls bypass the proxy.
+
+Build the sandbox image against the same index. Behind a proxy, add
+`--build-arg HTTPS_PROXY=http://<ip>:<port>`.
+
+```bash
+docker build -f docker/Dockerfile.sandbox \
+  --build-arg UV_DEFAULT_INDEX=https://nexus.example.com/repository/pypi/simple \
+  --build-arg UV_INSECURE_HOST=nexus.example.com \
+  -t owui-codebox-sandbox .
+```
+
+For the server image, set the index in the `[tool.uv]` block of
+[pyproject.toml](pyproject.toml) and run `uv lock`.
 
 ## 🛠️ Tools
 
 | Tool | Description |
 |---|---|
-| `run_python` | Run Python as notebook cells in the user's microVM with optional packages and input/output files |
+| `run_python` | Run Python as notebook cells in the user's microVM with optional packages, input/output files and image viewing |
 | `list_python_packages` | List packages already installed in the sandbox image |
 
-```json
-{
-  "code": "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2]})\ndf.to_csv('/sandbox/result.csv')",
-  "output_files": ["/sandbox/result.csv"]
-}
-```
-
-The next call runs the next cell in the same kernel:
-
-```json
-{
-  "code": "df.describe()"
-}
-```
-
-- `code`: the next cell; the value of its last expression is printed.
-- `packages`: packages to install, by name with optional versions/extras;
-  compatible wheels required, preinstalled ones are skipped.
-- `input_files`: OpenWebUI file IDs paired with paths under `/sandbox`.
-- `output_files`: files to return to the user, also ones an earlier call wrote.
-- `view_images`: images the model looks at itself (PNG, JPEG, GIF or WebP, at
-  most 5 MB); only useful with a vision model.
-
 Each user has one session: a microVM with its kernel, packages and files. It
-ends `SANDBOX_IDLE_TIMEOUT` seconds after its last call, lives in the server
-process and ends with it.
+ends `SANDBOX_IDLE_TIMEOUT` seconds after its last call, after
+`SANDBOX_MAX_DURATION` at the latest, or with the server.
 
-## ⚙️ Limits & security
+`view_images` shows the model up to three images and needs a vision model.
+Images stay in the chat's context and are sent again with every later message,
+so the tool description reserves this for exceptions.
 
-[.env.example](.env.example) lists all settings: RAM, CPU, timeouts, file and
-output limits, parallel sandboxes and per-user rate limits.
-Keep `SANDBOX_MAX_DURATION` above `SANDBOX_EXEC_TIMEOUT`; it bounds the
-lifetime of each microVM, so of every session.
+## 🔒 Security & limits
 
-- **Isolation:** every session boots its own microVM with its own Linux
-  kernel (KVM via libkrun), the restricted in-guest security profile and fixed
-  RAM/vCPU caps. Each user has one session, which holds a sandbox slot until
-  it ends; a user's runs take turns. Plan for up to
-  `MAX_CONCURRENT_SANDBOXES` × `SANDBOX_MEMORY` of RAM.
-- **Network:** a microVM's policy allows connections to the host and port of
-  `SANDBOX_INDEX_URL` and to `files.pythonhosted.org`, both by name, and denies
-  everything else from boot, name resolution included. HTTPS is intercepted,
-  so an allowed host cannot be asked for another site. `packages` are
-  installed from there as prebuilt wheels only (`--only-binary=:all:`).
+[.env.example](.env.example) lists all settings.
+
+- **Access:** requests need a JWT signed with `JWT_SECRET`, with the user in the
+  `id` claim. Use a TLS reverse proxy outside a trusted network.
+- **Isolation:** every session boots its own microVM with its own Linux kernel
+  (KVM via libkrun), the restricted in-guest security profile and fixed
+  RAM/vCPU caps. Plan for up to `MAX_CONCURRENT_SANDBOXES` × `SANDBOX_MEMORY`
+  of RAM.
+- **Network:** a microVM's policy allows the host and port of
+  `SANDBOX_INDEX_URL` and `files.pythonhosted.org`, both by name, and denies
+  everything else, name resolution included. HTTPS is intercepted, so an
+  allowed host cannot be asked for another site.
 - **Disk:** a microVM can write 4 GiB to its own disk (microsandbox default),
   `packages` included; it is removed when the session ends.
-- **Files:** transfers are cut off at the size limit, never buffered beyond it.
-  Only regular files under `/sandbox` come back; directories and paths outside
-  it are rejected.
-- **Errors:** tool errors never carry exception text, so no URLs, hosts or stack
-  traces leak into the chat.
-- **Output:** stdout/stderr are read as a stream. A run that prints more than
-  `SANDBOX_MAX_FILE_SIZE` bytes is stopped and its kernel restarts; the last
-  `SANDBOX_MAX_OUTPUT` characters of each stream are returned. The kernel
-  buffers output in memory, so with a small `SANDBOX_MEMORY` such as 512 MiB a
-  flood can kill the kernel first; the run then reports that it died.
-- **Host access:** the server needs `/dev/kvm` only.
+- **Files:** only regular files under `/sandbox` come back.
+
+microsandbox keeps `/dev/kvm` out of the microVM. As a second layer, turn nested
+virtualization off on the host (`kvm_amd` on AMD), so its code stays out of
+reach if that ever changes:
+
+```bash
+echo "options kvm_intel nested=0" | sudo tee /etc/modprobe.d/kvm-nested.conf
+sudo modprobe -r kvm_intel && sudo modprobe kvm_intel
+```

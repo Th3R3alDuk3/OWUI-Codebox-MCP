@@ -18,10 +18,10 @@ class PackageList(BaseModel):
 
 class InputFile(BaseModel):
     id: str = Field(
-        description="OpenWebUI ID of a file the user attached.",
+        description="OpenWebUI file ID.",
     )
     path: str = Field(
-        description="Path under /sandbox to place the file at, e.g. '/sandbox/data.csv'.",
+        description="Target path under /sandbox, e.g. '/sandbox/data.csv'.",
     )
 
 
@@ -33,16 +33,13 @@ class OutputFile(BaseModel):
         description="Size in bytes.",
     )
     download_url: str = Field(
-        description="Download URL to give to the user.",
+        description="Download URL.",
     )
 
 
 class RunResult(BaseModel):
     exit_code: int = Field(
-        description=(
-            "Exit code; 0 means success, 1 an error, -1 that the run printed "
-            "too much and the kernel restarted, losing its variables."
-        ),
+        description="Exit code; 0 means success.",
     )
     stdout: str = Field(
         description="Standard output.",

@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     sandbox_index_url: str
     # empty unless the index uses an own certificate
     sandbox_insecure_host: str
+    # IP:port for http and https traffic; empty for none
+    sandbox_proxy: str = ""
     # MiB
     sandbox_memory: int
     sandbox_cpus: int
@@ -40,8 +42,6 @@ class Settings(BaseSettings):
     sandbox_max_output: int
     # per call, for input_files and output_files each
     sandbox_max_files: int
-    # per call
-    sandbox_max_packages: int
 
 
 @cache

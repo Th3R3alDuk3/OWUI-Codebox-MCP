@@ -99,7 +99,10 @@ def _clip(
         "`download_url`.\n\n"
         "Each call runs `code` as the next cell in the user's kernel; "
         "variables, imports, packages and files carry over until it has been "
-        f"idle for {_settings.sandbox_idle_timeout:.0f}s.\n\n"
+        f"idle for {_settings.sandbox_idle_timeout:.0f}s, and for at most "
+        f"{_settings.sandbox_max_duration:.0f}s in total. A result with "
+        "`new_session` true started without them, so redo what the task "
+        "still needs.\n\n"
         "Viewing images is expensive and they stay in the chat's context, so "
         "`view_images` is the exception: use it only when the user asks or "
         "the task is impossible without seeing an image, and list as few as "
@@ -325,7 +328,9 @@ async def run_python(
         stdout=_clip(stdout),
         stderr=_clip(stderr),
         output_files=uploaded_files,
+        new_session=session.new,
     )
+    session.new = False
 
     # One JSON text block, so clients do not append the structured copy again.
     return ToolResult(

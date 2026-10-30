@@ -53,3 +53,6 @@ class RunResult(BaseModel):
             "and the run succeeded."
         ),
     )
+    new_session: bool = Field(
+        description="True on a session's first result; earlier state is gone.",
+    )

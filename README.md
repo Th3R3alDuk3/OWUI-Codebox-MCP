@@ -113,7 +113,9 @@ For the server image, set the index in the `[tool.uv]` block of
 
 Each user has one session: a microVM with its kernel, packages and files. It
 ends `SANDBOX_IDLE_TIMEOUT` seconds after its last call, after
-`SANDBOX_MAX_DURATION` at the latest, or with the server.
+`SANDBOX_MAX_DURATION` at the latest, or with the server. The first result of a
+new session carries `new_session: true`, so the model knows earlier state is
+gone.
 
 `view_images` shows the model up to three images and needs a vision model.
 Images stay in the chat's context and are sent again with every later message,

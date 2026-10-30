@@ -25,6 +25,8 @@ class Session:
     idle_since: float = field(default_factory=monotonic)
     # Started by run_python when needed.
     kernel: Job | None = None
+    # Until a result has told the model.
+    new: bool = True
 
 
 # One session per user, keyed by user ID.
@@ -82,6 +84,14 @@ async def use_session(
         except ToolError as error:
             logger.warning("session %s: %s", user_id, error)
             raise
+        except MicrosandboxError as error:
+            logger.warning("session %s: %s", user_id, error)
+            raise ToolError(
+                "The sandbox failed during this call, usually because the "
+                f"session reached its {_settings.sandbox_max_duration:.0f}s "
+                "limit. Then variables and files are lost and the next call "
+                "starts a new session."
+            ) from error
         finally:
             session.idle_since = monotonic()
 

@@ -39,11 +39,11 @@ Requires a Linux host with **KVM** and Docker.
 
    ```bash
    docker run -d -p 8000:8000 \
+     --name owui-codebox-mcp \
      --restart unless-stopped \
      --device /dev/kvm \
      -v owui-codebox-data:/root/.microsandbox \
      --env-file .env \
-     --name owui-codebox-mcp \
      owui-codebox-mcp
    docker save owui-codebox-sandbox \
      | docker exec -i owui-codebox-mcp uv run --no-sync msb load

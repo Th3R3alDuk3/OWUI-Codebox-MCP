@@ -76,6 +76,7 @@ async def boot_sandbox() -> AsyncGenerator[Sandbox]:
             cpus=_settings.sandbox_cpus,
             workdir=WORK_DIR,
             security=SecurityProfile.RESTRICTED,
+            nested_virt=False,
             max_duration=_settings.sandbox_max_duration,
             ephemeral=True,
             env={"UV_DEFAULT_INDEX": _settings.sandbox_index_url},

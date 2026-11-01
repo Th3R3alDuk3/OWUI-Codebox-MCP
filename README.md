@@ -1,8 +1,13 @@
+<div align="center">
+  <img src="logo.png" alt="OWUI-Codebox-MCP logo" width="200">
+
 # OWUI-Codebox-MCP
 
 [![App image](https://github.com/Th3R3alDuk3/OWUI-Codebox-MCP/actions/workflows/app.yml/badge.svg)](https://github.com/Th3R3alDuk3/OWUI-Codebox-MCP/actions/workflows/app.yml)
 [![Python](https://img.shields.io/badge/python-3.13%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/github/license/Th3R3alDuk3/OWUI-Codebox-MCP)](LICENSE)
+
+</div>
 
 > Isolated Python sandboxes for OpenWebUI via MCP.
 

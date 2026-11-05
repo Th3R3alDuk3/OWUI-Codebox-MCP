@@ -26,14 +26,17 @@ class InputFile(BaseModel):
 
 
 class OutputFile(BaseModel):
+    id: str = Field(
+        description="OpenWebUI file ID.",
+    )
     name: str = Field(
         description="Name of the file returned from the sandbox.",
     )
     size: int = Field(
         description="Size in bytes.",
     )
-    download_url: str = Field(
-        description="Download URL.",
+    path: str = Field(
+        description="Relative OpenWebUI download path.",
     )
 
 

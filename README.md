@@ -15,8 +15,8 @@
   packages and files carry over.
 - **Isolated:** each user gets a microVM with its own kernel, built on
   [microsandbox](https://github.com/superradcompany/microsandbox).
-- **Files:** OpenWebUI attachments go in, produced files come back as download
-  links.
+- **Files:** OpenWebUI attachments go in, produced files come back as
+  OpenWebUI files with ID and download path.
 - **Closed network:** a microVM reaches only the package index.
 
 ## 🚀 Setup

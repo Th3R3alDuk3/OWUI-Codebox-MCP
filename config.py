@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # MiB
     sandbox_memory: int
     sandbox_cpus: int
-    # seconds; per cell
+    # seconds; per call
     sandbox_exec_timeout: float
     # seconds; how long a session waits for the next call
     sandbox_idle_timeout: float

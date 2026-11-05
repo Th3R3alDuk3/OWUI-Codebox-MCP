@@ -1,14 +1,14 @@
 [project]
 name = "owui-codebox-mcp"
-version = "0.8.2"
+version = "0.9.0"
 description = "Isolated Python sandboxes for OpenWebUI via MCP."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
 dependencies = [
-    "fastmcp>=4.1.4",
+    "fastmcp>=4.1.6",
     "httpx2>=2.16.0",
-    "microsandbox>=0.7.12",
+    "microsandbox>=0.7.13",
     "pydantic>=2.14.2",
     "pydantic-settings>=2.16.2",
     "rich>=15.0.0",

@@ -1,4 +1,4 @@
-from asyncio import Lock, timeout
+from asyncio import Lock, get_running_loop, timeout_at
 from contextlib import suppress
 from mimetypes import guess_type
 from pathlib import Path
@@ -87,7 +87,7 @@ def _clip(
     description=(
         "Run Python in a Jupyter kernel inside an isolated microVM and return "
         "stdout, stderr and the exit code. The working directory is "
-        f"'{WORK_DIR}'. Runs are killed after "
+        f"'{WORK_DIR}'. Runs, package installs included, are killed after "
         f"{_settings.sandbox_exec_timeout:.0f}s and only the last "
         f"{_settings.sandbox_max_output:,} characters of each stream are returned, "
         "so print summaries, not whole datasets. Exit code -1 means the run "
@@ -95,8 +95,8 @@ def _clip(
         "The sandbox reaches only its package index: packages come from "
         "`packages` and data from `input_files`, never by downloading in the "
         "code. Files the code writes reach the user only when listed in "
-        "`output_files`, in the same or a later call; pass on their "
-        "`download_url`.\n\n"
+        "`output_files`, in the same or a later call; link their `path` or "
+        "pass it to `display_file` where available.\n\n"
         "Each call runs `code` as the next cell in the user's kernel; "
         "variables, imports, packages and files carry over until it has been "
         f"idle for {_settings.sandbox_idle_timeout:.0f}s, and for at most "
@@ -162,11 +162,22 @@ async def run_python(
                 "--InteractiveShell.cache_size=0",
             ], stdin=b"")
 
+        # Installs count against the run's limit.
+        deadline = get_running_loop().time() + _settings.sandbox_exec_timeout
+
         if packages:
 
-            installed = await session.sandbox.exec("uv", [
-                "pip", "install", "--only-binary=:all:", "--", *packages
-            ])
+            try:
+                async with timeout_at(deadline):
+                    installed = await session.sandbox.exec("uv", [
+                        "pip", "install", "--only-binary=:all:", "--", *packages
+                    ])
+            except TimeoutError as error:
+                raise ToolError(
+                    "Installing the packages timed out after "
+                    f"{_settings.sandbox_exec_timeout:.0f}s. Request fewer or "
+                    "smaller packages."
+                ) from error
 
             if installed.exit_code != 0:
                 logger.warning("session %s: package install failed\n%s",
@@ -189,9 +200,9 @@ async def run_python(
                 )
             except RuntimeError as error:
                 raise ToolError(
-                    f"Could not fetch input file '{input_file.id}' "
-                    "from OpenWebUI. Check that the ID belongs to a file "
-                    "the user actually attached."
+                    f"Could not fetch input file '{input_file.id}'. {error} "
+                    "Check that the ID belongs to a file the user actually "
+                    "attached."
                 ) from error
 
             if len(data) > _settings.sandbox_max_file_size:
@@ -216,7 +227,7 @@ async def run_python(
 
         try:
             # The SDK `timeout` ends in a plain exit event, like a crash.
-            async with timeout(_settings.sandbox_exec_timeout):
+            async with timeout_at(deadline):
 
                 kernel_pid = (await kernel.inspect()).pid
 
@@ -253,9 +264,9 @@ async def run_python(
         except TimeoutError as error:
             raise ToolError(
                 f"Execution timed out after "
-                f"{_settings.sandbox_exec_timeout:.0f}s; the kernel restarts, "
-                "so variables are lost, files remain. Make the code faster, "
-                "or split the work across calls."
+                f"{_settings.sandbox_exec_timeout:.0f}s, package installs "
+                "included; the kernel restarts, so variables are lost, files "
+                "remain. Make the code faster, or split the work across calls."
             ) from error
 
         logger.info("session %s: exit %d after %.1fs",
@@ -284,7 +295,7 @@ async def run_python(
                 file_name = Path(output_file_path).name
 
                 try:
-                    download_url = await upload_file(
+                    file_id, download_path = await upload_file(
                         file_name=file_name,
                         data=data,
                         content_type=(
@@ -295,14 +306,16 @@ async def run_python(
                     )
                 except RuntimeError as error:
                     raise ToolError(
-                        f"Could not upload output file '{file_name}' "
-                        "to OpenWebUI."
+                        f"Could not upload output file '{file_name}'. {error} "
+                        "Fix the cause if you can and list it in "
+                        "`output_files` again; otherwise tell the user."
                     ) from error
 
                 uploaded_files.append(OutputFile(
+                    id=file_id,
                     name=file_name,
                     size=len(data),
-                    download_url=download_url,
+                    path=download_path,
                 ))
 
             for image_path in view_images:

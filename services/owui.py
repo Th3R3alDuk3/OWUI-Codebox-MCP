@@ -1,4 +1,4 @@
-from httpx2 import AsyncClient, HTTPStatusError, RequestError
+from httpx2 import AsyncClient, HTTPStatusError, RequestError, Response
 
 from config import get_settings
 
@@ -16,6 +16,15 @@ def _client() -> AsyncClient:
         verify=_settings.owui_verify_tls,
         timeout=_REQUEST_TIMEOUT_SECONDS,
     )
+
+
+def _error_detail(
+    response: Response,
+) -> str:
+    try:
+        return str(response.json()["detail"]).rstrip(".")
+    except (ValueError, KeyError, TypeError):
+        return f"{response.status_code} {response.reason_phrase}"
 
 
 async def download_file(
@@ -36,6 +45,9 @@ async def download_file(
                 headers={"Authorization": f"Bearer {token}"},
             ) as response,
         ):
+            if response.is_error:
+                await response.aread()
+
             response.raise_for_status()
 
             data = bytearray()
@@ -50,7 +62,7 @@ async def download_file(
 
     except HTTPStatusError as error:
         raise RuntimeError(
-            "OpenWebUI rejected the download."
+            f"OpenWebUI rejected the download: {_error_detail(error.response)}."
         ) from error
     except RequestError as error:
         raise RuntimeError(
@@ -63,7 +75,7 @@ async def upload_file(
     data: bytes,
     content_type: str,
     token: str,
-) -> str:
+) -> tuple[str, str]:
 
     try:
         async with _client() as client:
@@ -82,14 +94,15 @@ async def upload_file(
             raise RuntimeError(
                 "OpenWebUI upload response carries no file id.")
 
-        return _FILE_DOWNLOAD_URL.format(
-            base_url=_settings.owui_base_url,
+        # Relative to OpenWebUI.
+        return file_id, _FILE_DOWNLOAD_URL.format(
+            base_url="",
             file_id=file_id,
         )
 
     except HTTPStatusError as error:
         raise RuntimeError(
-            "OpenWebUI rejected the upload."
+            f"OpenWebUI rejected the upload: {_error_detail(error.response)}."
         ) from error
     except RequestError as error:
         raise RuntimeError(

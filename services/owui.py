@@ -33,16 +33,29 @@ async def _exchange_token(
     token: str,
 ) -> str:
 
-    async with _client() as client:
-        response = await client.post(
-            url=_TOKEN_EXCHANGE_URL.format(
-                base_url=_settings.owui_base_url,
-            ),
-            json={"token": token},
-        )
-        response.raise_for_status()
+    try:
+        async with _client() as client:
+            response = await client.post(
+                url=_TOKEN_EXCHANGE_URL.format(
+                    base_url=_settings.owui_base_url,
+                ),
+                json={"token": token},
+            )
+            response.raise_for_status()
 
-    return response.json()["token"]
+    except HTTPStatusError as error:
+        raise RuntimeError(
+            "OpenWebUI rejected the token exchange: "
+            f"{_error_detail(error.response)}."
+        ) from error
+
+    owui_token = response.json().get("token")
+
+    if not owui_token:
+        raise RuntimeError(
+            "OpenWebUI answered the token exchange without a token.")
+
+    return owui_token
 
 
 async def download_file(

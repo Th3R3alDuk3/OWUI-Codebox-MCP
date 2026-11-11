@@ -31,9 +31,11 @@ Requires a Linux host with **KVM** and Docker.
    docker build -f docker/Dockerfile.app -t owui-codebox-mcp .
    ```
 
-2. Create the configuration, then set `JWT_SECRET` to OpenWebUI's
-   `WEBUI_SECRET_KEY` and `OWUI_BASE_URL` to an OpenWebUI URL this server can
-   reach.
+2. Create the configuration, then set `JWT_ISSUER` to the Keycloak realm,
+   `https://<keycloak>/realms/<realm>`, exactly as its tokens name it in
+   `iss`. `JWT_JWKS_URI` takes the realm's signing keys,
+   `<JWT_ISSUER>/protocol/openid-connect/certs`, and `OWUI_BASE_URL` an
+   OpenWebUI URL, both reachable from this server.
 
    ```bash
    cp .env.example .env
@@ -54,7 +56,12 @@ Requires a Linux host with **KVM** and Docker.
      | docker exec -i owui-codebox-mcp uv run --no-sync msb load
    ```
 
-4. Connect OpenWebUI to `http://<host>:8000/mcp`.
+4. Connect OpenWebUI, signing users in through the same Keycloak realm: add
+   an **MCP** tool server at `http://<host>:8000/mcp` with auth **OAuth**.
+   For input and output files the server exchanges the user's token for an
+   OpenWebUI token, so OpenWebUI needs `ENABLE_OAUTH_TOKEN_EXCHANGE=true` and
+   `OAUTH_TOKEN_EXCHANGE_TRUSTED_CLIENT_IDS` set to its client ID; Keycloak
+   then has to add that client to the token's audience (audience mapper).
 
 ### Prebuilt images
 
@@ -130,8 +137,10 @@ so the tool description reserves this for exceptions.
 
 [.env.example](.env.example) lists all settings.
 
-- **Access:** requests need a JWT signed with `JWT_SECRET`, with the user in the
-  `id` claim. Use a TLS reverse proxy outside a trusted network.
+- **Access:** requests need an access token of the `JWT_ISSUER` realm signed
+  with RS256, with the user in the `sub` claim; input and output files go
+  through the OpenWebUI account it is exchanged for. Use a TLS reverse proxy
+  outside a trusted network.
 - **Isolation:** every session boots its own microVM with its own Linux kernel
   (KVM via libkrun), the restricted in-guest security profile and fixed
   RAM/vCPU caps. Plan for up to `MAX_CONCURRENT_SANDBOXES` × `SANDBOX_MEMORY`

@@ -15,16 +15,17 @@ mcp = FastMCP(
     name="OWUI-Codebox-MCP",
     instructions=INSTRUCTIONS,
     auth=JWTVerifier(
-        public_key=settings.jwt_secret,
-        algorithm=settings.jwt_algorithm,
+        jwks_uri=settings.jwt_jwks_uri,
+        issuer=settings.jwt_issuer,
+        algorithm="RS256",
     ),
     middleware=[
         RateLimitingMiddleware(
             max_requests_per_second=settings.rate_limit_rps,
             burst_capacity=settings.rate_limit_burst,
-            # OpenWebUI JWTs carry the user in the `id` claim.
+            # Keycloak access tokens carry the user in the `sub` claim.
             get_client_id=lambda context: (
-                token.claims.get("id", "anonymous")
+                token.claims.get("sub", "anonymous")
                 if (token := get_access_token()) else "anonymous"
             ),
         ),

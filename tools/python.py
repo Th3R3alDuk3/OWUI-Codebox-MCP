@@ -146,7 +146,7 @@ async def run_python(
         ),
     ),
     token: AccessToken = CurrentAccessToken(),
-    user_id: str = TokenClaim("id"),
+    user_id: str = TokenClaim("sub"),
 ) -> ToolResult:
 
     async with use_session(user_id) as session:

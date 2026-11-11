@@ -10,8 +10,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    jwt_secret: str
-    jwt_algorithm: str
+    jwt_issuer: str
+    jwt_jwks_uri: str
 
     owui_base_url: str
     owui_verify_tls: bool

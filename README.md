@@ -35,7 +35,9 @@ Requires a Linux host with **KVM** and Docker.
    `https://<keycloak>/realms/<realm>`, exactly as its tokens name it in
    `iss`. `JWT_JWKS_URI` takes the realm's signing keys,
    `<JWT_ISSUER>/protocol/openid-connect/certs`, and `OWUI_BASE_URL` an
-   OpenWebUI URL, both reachable from this server.
+   OpenWebUI URL, both reachable from this server. For corporate or
+   self-signed CAs, mount a PEM bundle with every CA to trust and set
+   `SSL_CERT_FILE` to it.
 
    ```bash
    cp .env.example .env

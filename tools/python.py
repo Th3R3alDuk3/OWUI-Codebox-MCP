@@ -1,6 +1,5 @@
 from asyncio import Lock, get_running_loop, timeout_at
 from contextlib import suppress
-from mimetypes import guess_type
 from pathlib import Path
 from time import monotonic
 
@@ -23,7 +22,7 @@ from models.python import (
     PackageList,
     RunResult,
 )
-from services.owui import download_file, upload_file
+from services.owui import download_file, exchange_token, upload_file
 from services.sandbox import (
     KERNEL_CLIENT,
     KERNEL_CONNECTION_FILE,
@@ -96,8 +95,9 @@ def _clip(
         "`packages` and data from `input_files`, never by downloading in the "
         "code. Files the code writes reach the user only when listed in "
         "`output_files`, in the same or a later call. Then show each by "
-        "passing its `path` to `display_file` if available; otherwise give "
-        "the user the Markdown link `[name](path)`.\n\n"
+        "passing the `path` returned for it, not its sandbox path, to "
+        "`display_file` if available; otherwise give the user the Markdown "
+        "link `[name](path)`.\n\n"
         "Each call runs `code` as the next cell in the user's kernel; "
         "variables, imports, packages and files carry over until it has been "
         f"idle for {_settings.sandbox_idle_timeout:.0f}s, and for at most "
@@ -151,6 +151,18 @@ async def run_python(
 
     async with use_session(user_id) as session:
 
+        owui_token = ""
+
+        # Only file transfers need OpenWebUI.
+        if input_files or output_files:
+            try:
+                owui_token = await exchange_token(token.token)
+            except RuntimeError as error:
+                raise ToolError(
+                    f"Could not authorize file access in OpenWebUI. {error} "
+                    "Tell the user."
+                ) from error
+
         kernel = session.kernel
 
         # Boots while packages and input files arrive.
@@ -196,8 +208,8 @@ async def run_python(
             try:
                 data = await download_file(
                     file_id=input_file.id,
-                    token=token.token,
-                    max_bytes=_settings.sandbox_max_file_size,
+                    owui_token=owui_token,
+                    max_size=_settings.sandbox_max_file_size,
                 )
             except RuntimeError as error:
                 raise ToolError(
@@ -208,8 +220,8 @@ async def run_python(
 
             if len(data) > _settings.sandbox_max_file_size:
                 raise ToolError(
-                    f"Input file too large ({len(data):,} bytes). "
-                    f"Limit is {_settings.sandbox_max_file_size:,} bytes."
+                    f"Input file '{input_file.id}' exceeds the limit of "
+                    f"{_settings.sandbox_max_file_size:,} bytes."
                 )
 
             try:
@@ -299,11 +311,7 @@ async def run_python(
                     file_id, download_path = await upload_file(
                         file_name=file_name,
                         data=data,
-                        content_type=(
-                            guess_type(file_name)[0]
-                            or "application/octet-stream"
-                        ),
-                        token=token.token,
+                        owui_token=owui_token,
                     )
                 except RuntimeError as error:
                     raise ToolError(

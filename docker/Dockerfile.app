@@ -1,5 +1,10 @@
 FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim
 
+# MIME types for output file uploads.
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends media-types \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app/
 
 ENV UV_COMPILE_BYTECODE=1 \

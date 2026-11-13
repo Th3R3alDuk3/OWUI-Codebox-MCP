@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     jwt_jwks_uri: str
 
     owui_base_url: str
-    owui_verify_tls: bool
 
     max_concurrent_sandboxes: int
 
